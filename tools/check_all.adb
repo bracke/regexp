@@ -77,6 +77,8 @@ begin
    Project_Tools.Tree_Checks.Require_No_Nonempty_Stderr (Root & "/tools/obj");
    Project_Tools.Tree_Checks.Require_No_Nonempty_Stderr (Root & "/check_regexp/obj");
 
+   Project_Tools.Release_Checks.Require_Clean_Git_Worktree ("regexp", Root);
+
    Ada.Text_IO.Put_Line ("regexp release checklist passed");
 exception
    when Program_Error =>

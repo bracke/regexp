@@ -1,3 +1,4 @@
+with Ada.Command_Line;
 with Ada.Text_IO; use Ada.Text_IO;
 
 with Regexp;
@@ -14,6 +15,7 @@ procedure Basic_Search is
 begin
    if Compiled.Status /= R.Compile_Ok then
       Put_Line ("compile failed: " & R.Status_Image (Compiled.Status));
+      Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
       return;
    end if;
 
@@ -26,5 +28,7 @@ begin
    if Found.Status = R.Match_Ok then
       Put_Line ("first:  " & Natural'Image (Found.First));
       Put_Line ("last:   " & Natural'Image (Found.Last));
+   else
+      Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
    end if;
 end Basic_Search;

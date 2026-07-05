@@ -7,6 +7,7 @@ with Project_Tools.Ada_Source;
 with Project_Tools.Alire_Manifests;
 with Project_Tools.AUnit_Checks;
 with Project_Tools.Files;
+with Project_Tools.Processes;
 with Project_Tools.Release_Checks;
 with Project_Tools.Text;
 with Project_Tools.Tree_Checks;
@@ -54,54 +55,21 @@ procedure Check_Regexp is
    procedure Require_Release_Tree_Clean is
       use Ada.Strings.Unbounded;
 
-      Stage  : constant String := "/tmp/regexp-release-tree-check";
-      Errors : Natural := 0;
-
-      procedure Report (Path : String; Message : String) is
-      begin
-         Put_Line (Standard_Error, "error: " & Message & ": " & Path);
-         Errors := Errors + 1;
-      end Report;
-
-      function Has_Suffix (Text : String; Suffix : String) return Boolean is
-        (Text'Length >= Suffix'Length
-         and then Text (Text'Last - Suffix'Length + 1 .. Text'Last) = Suffix);
-
-      procedure Check_Tree (Dir : String) is
-         Search    : Ada.Directories.Search_Type;
-         Dir_Entry : Ada.Directories.Directory_Entry_Type;
-      begin
-         Ada.Directories.Start_Search (Search, Dir, "");
-         while Ada.Directories.More_Entries (Search) loop
-            Ada.Directories.Get_Next_Entry (Search, Dir_Entry);
-
-            declare
-               Name : constant String := Ada.Directories.Simple_Name (Dir_Entry);
-               Path : constant String := Ada.Directories.Full_Name (Dir_Entry);
-            begin
-               if Name = "." or else Name = ".." then
-                  null;
-               elsif Name in "alire" | "bin" | "config" | "lib" | "obj" then
-                  Report (Path, "generated directory reached staged release tree");
-               elsif Ada.Directories.Kind (Dir_Entry) = Ada.Directories.Directory then
-                  Check_Tree (Path);
-               elsif Has_Suffix (Name, ".ali")
-                 or else Has_Suffix (Name, ".o")
-                 or else Has_Suffix (Name, ".bexch")
-                 or else Has_Suffix (Name, ".stdout")
-                 or else Has_Suffix (Name, ".stderr")
-                 or else Has_Suffix (Name, ".cswi")
-               then
-                  Report (Path, "generated build file reached staged release tree");
-               end if;
-            end;
-         end loop;
-         Ada.Directories.End_Search (Search);
-      exception
-         when others =>
-            Ada.Directories.End_Search (Search);
-            raise;
-      end Check_Tree;
+      Stage               : constant String := "/tmp/regexp-release-tree-check";
+      Generated_Entries   : constant Project_Tools.Tree_Checks.Text_List :=
+        [To_Unbounded_String ("alire"),
+         To_Unbounded_String ("bin"),
+         To_Unbounded_String ("config"),
+         To_Unbounded_String ("lib"),
+         To_Unbounded_String ("obj")];
+      Generated_Suffixes  : constant Project_Tools.Tree_Checks.Text_List :=
+        [To_Unbounded_String (".ali"),
+         To_Unbounded_String (".o"),
+         To_Unbounded_String (".bexch"),
+         To_Unbounded_String (".stdout"),
+         To_Unbounded_String (".stderr"),
+         To_Unbounded_String (".cswi")];
+      Errors              : Natural := 0;
    begin
       Project_Tools.Files.Delete_Tree (Stage);
       Project_Tools.Files.Copy_Release_Source_Tree
@@ -120,7 +88,13 @@ procedure Check_Regexp is
             To_Unbounded_String ("alire.toml.prev")],
          Quiet        => False);
 
-      Check_Tree (Stage);
+      Project_Tools.Tree_Checks.Check_No_Forbidden_Tree_Artifacts
+        (Errors,
+         Stage,
+         Generated_Entries,
+         Generated_Suffixes,
+         "staged release tree",
+         Quiet => False);
       Project_Tools.Tree_Checks.Check_No_Generated_Python (Errors, Stage, Quiet => False);
       Project_Tools.Files.Delete_Tree (Stage);
 
@@ -193,7 +167,108 @@ procedure Check_Regexp is
          Crate         => "project_tools",
          Relative_Path => "../../project_tools",
          Quiet         => False);
+      Project_Tools.Alire_Manifests.Require_Pin_Free_Crate_Manifest
+        (Manifest => Root & "/check_regexp/alire.release.toml",
+         Name     => "check_regexp",
+         Quiet    => False);
+      Project_Tools.Alire_Manifests.Require_Release_Dependencies
+        (Manifest     => Root & "/check_regexp/alire.release.toml",
+         Dependencies =>
+           [Ada.Strings.Unbounded.To_Unbounded_String ("regexp"),
+            Ada.Strings.Unbounded.To_Unbounded_String ("project_tools")],
+         Quiet        => False);
    end Require_Manifest_Policy;
+
+   procedure Require_Check_Regexp_Staging_Workflow is
+      use Ada.Strings.Unbounded;
+
+      Workspace     : constant String := "/tmp/regexp-check-regexp-staging";
+      Staged_Root   : constant String := Workspace & "/regexp";
+      Staged_Check  : constant String := Staged_Root & "/check_regexp";
+      Staged_Tools  : constant String := Workspace & "/project_tools";
+      Release       : constant String := Root & "/check_regexp/alire.release.toml";
+      Build         : constant String := Staged_Check & "/alire.build.toml";
+      Pins          : constant String :=
+        "[[pins]]" & ASCII.LF
+        & "regexp = { path = '..' }" & ASCII.LF
+        & ASCII.LF
+        & "[[pins]]" & ASCII.LF
+        & "project_tools = { path = '../../project_tools' }" & ASCII.LF;
+      Alr           : constant String := Project_Tools.Processes.Locate_Command ("alr");
+   begin
+      Project_Tools.Processes.Require_Command
+        ("alr", "alr executable not found on PATH");
+      Project_Tools.Files.Delete_Tree (Workspace);
+      Project_Tools.Files.Copy_Release_Source_Tree
+        (Source_Dir   => Root,
+         Target_Dir   => Staged_Root,
+         Skip_Entries =>
+           [To_Unbounded_String (".git"),
+            To_Unbounded_String ("alire"),
+            To_Unbounded_String ("bin"),
+            To_Unbounded_String ("config"),
+            To_Unbounded_String ("lib"),
+            To_Unbounded_String ("obj")],
+         Skip_Files   =>
+           [To_Unbounded_String ("alire.lock"),
+            To_Unbounded_String ("alire.lock.prev"),
+            To_Unbounded_String ("alire.toml.prev")],
+         Quiet        => False);
+      Project_Tools.Files.Copy_Release_Source_Tree
+        (Source_Dir   => Root & "/../project_tools",
+         Target_Dir   => Staged_Tools,
+         Skip_Entries =>
+           [To_Unbounded_String (".git"),
+            To_Unbounded_String ("alire"),
+            To_Unbounded_String ("bin"),
+            To_Unbounded_String ("config"),
+            To_Unbounded_String ("lib"),
+            To_Unbounded_String ("obj")],
+         Skip_Files   =>
+           [To_Unbounded_String ("alire.lock"),
+            To_Unbounded_String ("alire.lock.prev"),
+            To_Unbounded_String ("alire.toml.prev")],
+         Quiet        => False);
+
+      Project_Tools.Alire_Manifests.Copy_Release_Manifest
+        (Template => Release,
+         Target   => Staged_Check & "/alire.toml",
+         Quiet    => False);
+      Ada.Directories.Copy_File
+        (Source_Name => Root & "/LICENSE",
+         Target_Name => Staged_Check & "/LICENSE",
+         Form        => "mode=overwrite");
+      Project_Tools.Alire_Manifests.Write_Build_Manifest_Overlay
+        (Template => Release,
+         Target   => Build,
+         Pins     => Pins,
+         Quiet    => False);
+      Project_Tools.Alire_Manifests.Require_Build_Overlay
+        (Overlay      => Build,
+         Template     => Release,
+         Dependencies =>
+           [To_Unbounded_String ("regexp = { path = '..' }"),
+            To_Unbounded_String ("project_tools = { path = '../../project_tools' }")],
+         Quiet        => False);
+      Project_Tools.Alire_Manifests.Require_Staged_Crate_Source
+        (Crate_Dir => Staged_Check,
+         Name      => "check_regexp",
+         GPR_File  => "check_regexp.gpr",
+         Quiet     => False);
+      Project_Tools.Alire_Manifests.Activate_Build_Manifest (Staged_Check, Quiet => False);
+      Project_Tools.Release_Checks.Run
+        ("staged check_regexp build",
+         Staged_Check,
+         Alr,
+         [1 => new String'("build")]);
+      Project_Tools.Alire_Manifests.Restore_Publish_Manifest (Staged_Check);
+      Project_Tools.Files.Delete_Tree (Workspace);
+   exception
+      when others =>
+         Project_Tools.Alire_Manifests.Restore_Publish_Manifest (Staged_Check);
+         Project_Tools.Files.Delete_Tree (Workspace);
+         raise;
+   end Require_Check_Regexp_Staging_Workflow;
 
    procedure Require_Example_Public_API_Only is
       Empty : Project_Tools.Ada_Source.String_List (1 .. 0);
@@ -206,6 +281,49 @@ procedure Check_Regexp is
             Quiet       => False);
       end loop;
    end Require_Example_Public_API_Only;
+
+   procedure Require_Example_Failure_Handling is
+   begin
+      for Path of Project_Tools.Files.List_Tree (Root & "/examples/src", "*.adb") loop
+         declare
+            File : constant String := Ada.Strings.Unbounded.To_String (Path);
+         begin
+            Project_Tools.Files.Require_Contains
+              (File,
+               "Ada.Command_Line.Set_Exit_Status",
+               "example must set nonzero exit status on failure: " & File,
+               Quiet => False);
+            Project_Tools.Files.Require_Contains
+              (File,
+               "Status",
+               "example must check regexp statuses: " & File,
+               Quiet => False);
+         end;
+      end loop;
+   end Require_Example_Failure_Handling;
+
+   procedure Require_Example_Outputs is
+      procedure Check (Name : String) is
+      begin
+         Project_Tools.Release_Checks.Require_Program_Output_Matches_Fenced_Text
+           (Expected_File => Root & "/examples/README.md",
+            Fence_Label   => "text " & Name,
+            Dir           => Root,
+            Program       => Root & "/examples/bin/" & Name,
+            Args          => [],
+            Label         => "example " & Name,
+            Quiet         => False);
+      end Check;
+   begin
+      Check ("basic_search");
+      Check ("case_sensitivity");
+      Check ("whole_word");
+      Check ("find_from_offsets");
+      Check ("matches_entire");
+      Check ("character_classes");
+      Check ("compile_errors");
+      Check ("step_limit");
+   end Require_Example_Outputs;
 
    procedure Require_Source_Policy is
       use Ada.Strings.Unbounded;
@@ -289,6 +407,9 @@ begin
        Ada.Strings.Unbounded.To_Unbounded_String (Root & "/docs/ai-usage.md"),
        Ada.Strings.Unbounded.To_Unbounded_String (Root & "/docs/ai-index.json"),
        Ada.Strings.Unbounded.To_Unbounded_String (Root & "/llms.txt"),
+       Ada.Strings.Unbounded.To_Unbounded_String (Root & "/examples/README.md"),
+       Ada.Strings.Unbounded.To_Unbounded_String (Root & "/check_regexp/README.md"),
+       Ada.Strings.Unbounded.To_Unbounded_String (Root & "/check_regexp/alire.release.toml"),
        Ada.Strings.Unbounded.To_Unbounded_String (Root & "/tools/check_all.adb"),
        Ada.Strings.Unbounded.To_Unbounded_String (Root & "/tools/tools.gpr")],
       "required regexp release file missing",
@@ -338,6 +459,7 @@ begin
 
    Require_Text ("tools/check_all.adb", "Project_Tools.Processes");
    Require_Text ("tools/check_all.adb", "Require_Command");
+   Require_Text ("tools/check_all.adb", "Require_Clean_Git_Worktree");
    Require_Text ("tools/check_all.adb", "gnatprove executable not found on PATH");
    Require_Text ("tools/check_all.adb", "gnatprove");
    Require_Text ("tools/check_all.adb", "--level=4");
@@ -346,7 +468,9 @@ begin
    Require_Text ("docs/SPARK.md", "gnatprove -P regexp.gpr --level=4");
    Require_Text ("docs/SPARK.md", "mandatory for release validation");
    Require_Text ("check_regexp/alire.toml", "project_tools");
+   Require_Text ("check_regexp/alire.release.toml", "project_tools = ""*""");
    Require_Manifest_Policy;
+   Require_Check_Regexp_Staging_Workflow;
 
    Require_Documented_Example ("examples/src/basic_search.adb");
    Require_Documented_Example ("examples/src/case_sensitivity.adb");
@@ -358,6 +482,8 @@ begin
    Require_Documented_Example ("examples/src/step_limit.adb");
    Require_Examples_Inventory;
    Require_Example_Public_API_Only;
+   Require_Example_Failure_Handling;
+   Require_Example_Outputs;
    Require_Source_Policy;
    Require_AUnit_Inventory;
    Require_Release_Tree_Clean;
