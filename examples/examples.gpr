@@ -1,0 +1,22 @@
+with "../regexp.gpr";
+
+project Examples is
+   for Source_Dirs use ("src");
+   for Object_Dir use "obj";
+   for Exec_Dir use "bin";
+   for Create_Missing_Dirs use "True";
+
+   for Main use
+     ("basic_search.adb",
+      "case_sensitivity.adb",
+      "whole_word.adb",
+      "find_from_offsets.adb",
+      "matches_entire.adb",
+      "character_classes.adb",
+      "compile_errors.adb",
+      "step_limit.adb");
+
+   package Compiler is
+      for Default_Switches ("Ada") use ("-gnat2022", "-gnatyM120", "-gnatX");
+   end Compiler;
+end Examples;

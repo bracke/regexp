@@ -1,0 +1,13 @@
+with "../regexp.gpr";
+with "../../project_tools/project_tools.gpr";
+project Check_Regexp is
+   for Source_Dirs use ("src");
+   for Object_Dir use "obj";
+   for Exec_Dir use "bin";
+   for Create_Missing_Dirs use "True";
+   for Main use ("check_regexp.adb");
+
+   package Compiler is
+      for Default_Switches ("Ada") use ("-gnat2022", "-gnatyM120", "-gnatX", "-gnata");
+   end Compiler;
+end Check_Regexp;

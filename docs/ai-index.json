@@ -1,0 +1,58 @@
+{
+  "name": "regexp",
+  "language": "Ada",
+  "package": "Regexp",
+  "summary": "Small bounded regular-expression engine for Ada and SPARK-compatible code.",
+  "entrypoints": {
+    "specification": "src/regexp.ads",
+    "readme": "README.md",
+    "ai_usage": "docs/ai-usage.md",
+    "api_reference": "docs/api-reference.md",
+    "examples": "examples/README.md"
+  },
+  "build": {
+    "library": "gprbuild -P regexp.gpr",
+    "examples": "gprbuild -P examples/examples.gpr",
+    "tests": "gprbuild -P tests/tests.gpr && tests/bin/tests"
+  },
+  "core_api": [
+    "Compile",
+    "Is_Valid",
+    "Find_First",
+    "Find_From",
+    "Matches_Entire",
+    "Status_Image"
+  ],
+  "supported_syntax": [
+    "literals",
+    ".",
+    "^",
+    "$",
+    "character classes",
+    "negated character classes",
+    "ranges",
+    "*",
+    "+",
+    "?",
+    "\\d",
+    "\\D",
+    "\\w",
+    "\\W",
+    "\\s",
+    "\\S"
+  ],
+  "unsupported_syntax": [
+    "grouping",
+    "alternation",
+    "bounded repeats"
+  ],
+  "important_semantics": [
+    "Compile patterns before matching.",
+    "Only use Compile_Result.Expression when Status is Compile_Ok.",
+    "Match offsets are one-based and relative to Text'First.",
+    "String slices report offsets relative to the slice.",
+    "Zero-length matches report Last less than First.",
+    "Default matching is ASCII case-insensitive.",
+    "Max_Steps bounds matching work."
+  ]
+}

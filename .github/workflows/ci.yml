@@ -1,0 +1,28 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux-release-check:
+    name: Linux release checklist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Ada toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gnat gprbuild gnatprove
+          sudo apt-get install -y libaunit-dev || sudo apt-get install -y libaunit22-dev || sudo apt-get install -y libaunit24-dev
+      - name: Build library
+        run: gprbuild -P regexp.gpr
+      - name: Run GNATprove
+        run: gnatprove -P regexp.gpr --level=4
+      - name: Build tests
+        run: gprbuild -P tests/tests.gpr
+      - name: Run tests
+        run: ./tests/bin/tests
+      - name: Build examples
+        run: gprbuild -P examples/examples.gpr

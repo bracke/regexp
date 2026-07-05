@@ -1,0 +1,80 @@
+# Regexp
+
+> Small bounded regular-expression engine for Ada and SPARK-compatible code.
+
+Regexp provides a compact API for compiling regular-expression patterns and
+matching them against Ada `String` values with bounded pattern size, bounded
+compiled state count, and configurable match step limits.
+
+## Use This Library When
+
+- You need regular-expression search in Ada.
+- You want predictable compile and match limits.
+- You need simple editor/project-search style regex features.
+- You want a small API that is easy to call from SPARK-compatible code.
+
+## Do Not Assume
+
+- This is not a full PCRE-compatible engine.
+- Grouping, alternation, and bounded repeats are unsupported.
+- Match offsets are not absolute source indexes; they are one-based offsets
+  relative to the `Text` argument passed to the match function.
+- The default match is ASCII case-insensitive.
+
+## Primary Files
+
+- [README.md](README.md): Human documentation and quickstart.
+- [docs/ai-usage.md](docs/ai-usage.md): AI-oriented usage rules and examples.
+- [docs/api-reference.md](docs/api-reference.md): Public API reference.
+- [src/regexp.ads](src/regexp.ads): Authoritative Ada package specification.
+- [examples/README.md](examples/README.md): Runnable example suite.
+- [examples/src/basic_search.adb](examples/src/basic_search.adb): Minimal compile and search example.
+- [examples/src/find_from_offsets.adb](examples/src/find_from_offsets.adb): Repeated search with `Find_From`.
+- [tests/src/regexp_tests.adb](tests/src/regexp_tests.adb): AUnit suite aggregator.
+- [tests/src/regexp_tests-*tests.adb](tests/src/): Split behavioral, edge-case, and regression test sections.
+
+## Core API
+
+```ada
+Compiled : constant Regexp.Compile_Result := Regexp.Compile ("a.c");
+Found    : Regexp.Match_Result;
+
+if Compiled.Status = Regexp.Compile_Ok then
+   Found := Regexp.Find_First (Compiled.Expression, "xxabcxx");
+end if;
+```
+
+Main functions:
+
+- `Compile (Pattern, Max_Pattern_Length, Max_States) return Compile_Result`
+- `Is_Valid (Expression) return Boolean`
+- `Find_First (Expression, Text, Options) return Match_Result`
+- `Find_From (Expression, Text, From, Options) return Match_Result`
+- `Matches_Entire (Expression, Text, Options) return Match_Result`
+- `Status_Image (Status) return String`
+
+## Supported Pattern Syntax
+
+- Literals
+- `.`
+- `^` and `$`
+- Character classes: `[abc]`, `[^abc]`, `[a-z]`
+- Quantifiers: `*`, `+`, `?`
+- Escapes: `\d`, `\D`, `\w`, `\W`, `\s`, `\S`
+- Escaped metacharacters: `\.`, `\*`, `\+`, `\?`, `\[`, `\]`, `\\`, `\^`, `\$`
+
+Unsupported syntax returns `Unsupported_Syntax`.
+
+## Build Commands
+
+```sh
+gprbuild -P regexp.gpr
+gprbuild -P examples/examples.gpr
+```
+
+Run examples:
+
+```sh
+examples/bin/basic_search
+examples/bin/compile_errors
+```
