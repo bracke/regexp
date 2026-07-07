@@ -1,5 +1,4 @@
 with AUnit.Assertions;
-
 package body Regexp_Tests.Support is
    use AUnit.Assertions;
    use Regexp;

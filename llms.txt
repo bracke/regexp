@@ -6,6 +6,11 @@ Regexp provides a compact API for compiling regular-expression patterns and
 matching them against Ada `String` values with bounded pattern size, bounded
 compiled state count, and configurable match step limits.
 
+Toolchain policy: use Alire GNAT 15 only. The root, tests, and `check_regexp`
+crates pin `gnat_native = "=15.2.1"`. Validate with
+`alr exec -- gnatls --version`; do not run plain system `gnat*`, `gnatmake`,
+`gnatls`, `gnatprove`, or `gprbuild` in this workspace.
+
 ## Use This Library When
 
 - You need regular-expression search in Ada.
@@ -16,7 +21,7 @@ compiled state count, and configurable match step limits.
 ## Do Not Assume
 
 - This is not a full PCRE-compatible engine.
-- Grouping, alternation, and bounded repeats are unsupported.
+- Empty alternatives and empty groups are supported.
 - Match offsets are not absolute source indexes; they are one-based offsets
   relative to the `Text` argument passed to the match function.
 - The default match is ASCII case-insensitive.
@@ -32,6 +37,12 @@ compiled state count, and configurable match step limits.
 - [examples/src/find_from_offsets.adb](examples/src/find_from_offsets.adb): Repeated search with `Find_From`.
 - [tests/src/regexp_tests.adb](tests/src/regexp_tests.adb): AUnit suite aggregator.
 - [tests/src/regexp_tests-*tests.adb](tests/src/): Split behavioral, edge-case, and regression test sections.
+- [tools/check_all.adb](tools/check_all.adb): Aggregate release checklist.
+- [check_regexp/README.md](check_regexp/README.md): Internal release checker documentation.
+- [check_regexp/src/check_regexp.adb](check_regexp/src/check_regexp.adb): Release metadata, documentation,
+  example, and staging checks.
+- [check_regexp/alire.release.toml](check_regexp/alire.release.toml): Pin-free manifest template for the
+  staged checker workflow.
 
 ## Core API
 
@@ -47,11 +58,87 @@ end if;
 Main functions:
 
 - `Compile (Pattern, Max_Pattern_Length, Max_States) return Compile_Result`
+- `Compile_Literal (Pattern, Max_Pattern_Length, Max_States) return Compile_Result`
+- `Compile_Literal_Set (Text, Literals, Max_Pattern_Length, Max_States) return Compile_Result`
+- `Compile_Literal_Word_Set (Text, Literals, Max_Pattern_Length, Max_States) return Compile_Result`
+- `Compile_Anchored`, `Compile_Whole_Word`, `Compile_Line`
+- `Compile_Literal_Anchored`, `Compile_Literal_Whole_Word`, `Compile_Literal_Line`
+- `Default_Options`, `Case_Sensitive_Options`, `Multiline_Options`, `Dot_All_Options`, `UTF_8_Options`
+- `Character_Mode_Type`, `ASCII_Mode`, `UTF_8_Mode`, `Validate_UTF_8`, `UTF_8_Validation_Result`
+- `Supports_Syntax`, `Syntax_Feature_Image`, `Supported_Syntax`, `Supported_Syntax_Detail`
+- `Digit_Class`, `Word_Class`, `Whitespace_Class`, `Identifier_Start_Class`
+- `Escape_Literal (Pattern) return String`
+- `Escape_Replacement (Replacement) return String`
+- `Append_Fragment`, `Append_Literal`, `Append_Literal_Alternative`
+- `Append_Class_Literal`, `Append_Class_Range`
+- `Build_Character_Class`, `Build_Literal_Alternation`, `Build_Literal_Word_Alternation`
 - `Is_Valid (Expression) return Boolean`
+- `Is_Literal`, `Is_Anchored`, `Is_Whole_Line`, `Needs_Backtracking`, `Can_Stream_Safely`
+- `Recommended_Strategy`
+- `Summary`, `Fingerprint`, `Pattern_Fingerprint`, `Metadata`, `Pattern_Metadata`
+- `Source_Kind`, `Copy_Source_Pattern`, `Lint`
+- `Compile_Diagnostic`, `Replacement_Diagnostic`
+- `Has_Match (Expression, Text, Options) return Boolean`
+- `Count_Matches (Expression, Text, Count, Status, Options)`
 - `Find_First (Expression, Text, Options) return Match_Result`
 - `Find_From (Expression, Text, From, Options) return Match_Result`
+- `Find_From_Planned (Expression, Text, From, Options) return Match_Result`
+- `Find_From_Planned_With_Captures`
+- `Capture_Count (Expression) return Natural`
+- `Capture_Index (Expression, Name) return Natural`
+- `Named_Captures`
+- `Capture_Name (Expression, Index, Output, Last, Status)`
+- `Has_Captures`, `Uses_Anchors`, `May_Match_Empty`, `Required_Prefix`, `Features`, `Validate_Policy`
+- `Validate_Policy_Detail`, `Pattern_Policy_Diagnostic`, `Policy_Feature`
+- `Literal_Search_Policy`, `Editor_Search_Policy`, `No_Backtracking_Features_Policy`
+- `Safe_User_Search_Policy`, `Streaming_Search_Policy`, `Editor_Replace_Policy`
+- `No_Empty_Match_Policy`, `No_Lookaround_Policy`, `No_Backreferences_Policy`
+- `Line_Column`, `Match_Line_Range`, `Match_Length`, `Contains_Offset`, `Match_Context`, `Find_First_Line`
+- `Before_Match`, `After_Match`
+- `Copy_Range`, `Copy_Before`, `Copy_After`, `Copy_Match_Line`, `Copy_Capture`, `Copy_Named_Capture`
+- `Named_Capture_Range`
+- `Find_First_With_Captures` / `Find_From_With_Captures`
+- `Find_All (Expression, Text, Matches, Count, Status, Options)`
+- `Find_All_From (Expression, Text, From, Matches, Count, Status, Options)`
+- `Find_First_Of`, `Find_From_Of`, `Tokenize`
+- `Tokenize_With_Kinds`, `Find_First_Of_With_Captures`, `Find_From_Of_With_Captures`, `Tokenize_With_Captures`
+- `Find_All_With_Captures` / `Find_All_With_Captures_From`
+- `Find_All_Overlapping_With_Captures` / `Find_All_Overlapping_With_Captures_From`
+- `Find_All_Lines`, `Find_All_Summary`, `Find_All_Line_Summary`
+- `Find_All_Overlapping` / `Find_All_Overlapping_From`
+- `Start` / `Next` / `Next_With_Captures` / `Next_Captured` / `Next_Line_Captured` with `Match_Cursor`
+- `Start_Token_Stream` / `Feed_Tokens` / `Feed_Tokens_Detail` /
+  `Feed_Tokens_With_Captures` with `Token_Stream_Cursor` and `Token_Stream_Status`
+- `Start_Stream` / `Feed` / `Feed_With_Captures` with `Stream_Cursor`
+- `Replace_First` / `Replace_All`
+- `Replace_First_Count` / `Replace_All_Count`
+- `Replace_First_Size` / `Replace_All_Size`
+- `Required_First_Output_Length`, `Required_All_Output_Length`, `Replacement_Fits`
+- `Plan_Replacement`, `Plan_Replacement_Detail`, `Replacement_Output_Map`, `Replacement_Plan`
+- `Validate_Replacement` / `Validate_Replacement_Detail` / `Replacement_References`
+- `Replacement_Summary`
+- `Replace_First_Preserving_Case` / `Replace_All_Preserving_Case`
+- `Split`
+- `Replace_All_Lines`, `Split_Lines`
+- `Copy_Match`
+- `Debug_Dump` / `Explain` / `Explain_Nodes`
+- `Format_Compile_Diagnostic` / `Format_Replacement_Diagnostic`
+- `Benchmark_Pattern`, `Benchmark_Text`
+- `Benchmark_Summary`, `Make_Token_Name`, `Copy_Token_Name`
 - `Matches_Entire (Expression, Text, Options) return Match_Result`
+- `Is_Syntax_Error`, `Is_Unsupported`, `Is_Limit_Error`
 - `Status_Image (Status) return String`
+
+`Stream_Cursor` retains `Default_Stream_Buffer_Length` bytes so matches can
+span chunk boundaries. Stream match offsets are one-based from the start of the
+stream. After `Stream_Match`, call `Feed` again with an empty chunk to drain
+additional buffered matches.
+Use the `Start_Stream` overload with `Max_Buffer_Length` for a smaller
+per-cursor retained-buffer limit.
+
+Replacement strings expand `\0`, `\1` through `\9`, `\k<name>`, and `\\`.
+They support case escapes `\U...\E`, `\L...\E`, `\u`, and `\l`.
+- `Diagnostic_Image (Result) return String`
 
 ## Supported Pattern Syntax
 
@@ -59,17 +146,43 @@ Main functions:
 - `.`
 - `^` and `$`
 - Character classes: `[abc]`, `[^abc]`, `[a-z]`
+- Character-class operators: `[a-z&&[^aeiou]]`, `[a-z--[aeiou]]`
 - Quantifiers: `*`, `+`, `?`
+- Bounded repeats: `{m}`, `{m,n}`, `{m,}`
+- Lazy quantifiers: `*?`, `+?`, `??`, `{m,n}?`
+- Possessive quantifiers: `*+`, `++`, `?+`, `{m,n}+`
+- Numbered capture grouping: `(cat|dog)`
+- Named capture grouping: `(?<name>cat|dog)`
+- Non-capturing grouping: `(?:cat|dog)`, `(?:ab)+`
+- Atomic grouping: `(?>cat|dog)`
+- Lookahead assertions: `(?=cat)`, `(?!cat)`
+- Fixed-width lookbehind assertions: `(?<=cat)`, `(?<!cat)`
+- Scoped inline options: `(?i:cat)`, `(?-i:cat)`, `(?m:^cat)`, `(?s:.)`
+- Top-level alternation: `cat|dog`
+- Backreferences to earlier captures: `\1`, `\k<name>`
 - Escapes: `\d`, `\D`, `\w`, `\W`, `\s`, `\S`
-- Escaped metacharacters: `\.`, `\*`, `\+`, `\?`, `\[`, `\]`, `\\`, `\^`, `\$`
+- Word boundaries: `\b`, `\B`
+- Unicode property classes: `\p{...}`, `\P{...}`
+- Escaped metacharacters: `\.`, `\*`, `\+`, `\?`, `\[`, `\]`, `\\`, `\^`, `\$`, `\|`
+
+Captures inside lookahead and lookbehind assertions are assertion-local and are
+not exported by `Capture_Count` or capture-aware match results. Generate only
+fixed-width lookbehind patterns; variable-width lookbehind is rejected as
+`Unsupported_Syntax`.
+Inline option groups are scoped to the group body. Use `i`/`-i` for
+case-insensitive or case-sensitive matching, `m`/`-m` for multiline anchors,
+and `s`/`-s` for dot-newline behavior.
+Backreferences must refer to captures declared earlier in the pattern.
+Possessive quantifiers and atomic groups commit to their longest internal match.
+Atomic subpatterns currently reject captures and backreferences.
 
 Unsupported syntax returns `Unsupported_Syntax`.
 
 ## Build Commands
 
 ```sh
-gprbuild -P regexp.gpr
-gprbuild -P examples/examples.gpr
+alr exec -- gprbuild -P regexp.gpr
+alr exec -- gprbuild -P examples/examples.gpr
 ```
 
 Run examples:
@@ -78,3 +191,20 @@ Run examples:
 examples/bin/basic_search
 examples/bin/compile_errors
 ```
+
+Full release validation:
+
+```sh
+alr build
+alr exec -- gprbuild -P regexp.gpr
+cd tests && alr exec -- gprbuild -P tests.gpr
+cd tests && ./bin/tests
+alr exec -- gprbuild -P examples/examples.gpr
+alr exec -- gprbuild -P tools/tools.gpr
+tools/bin/check_all
+```
+
+`tools/bin/check_all` requires Alire GNAT 15, runs GNATprove through `alr exec`,
+runs `check_regexp`, validates the
+staged `check_regexp/alire.release.toml` workflow, and requires a clean Git
+worktree after intended changes are committed.

@@ -11,8 +11,13 @@ project Examples is
       "case_sensitivity.adb",
       "whole_word.adb",
       "find_from_offsets.adb",
+      "find_all_matches.adb",
       "matches_entire.adb",
       "character_classes.adb",
+      "preset_patterns.adb",
+      "lookaround_options.adb",
+      "search_workflow.adb",
+      "advanced_search_planning.adb",
       "compile_errors.adb",
       "step_limit.adb");
 

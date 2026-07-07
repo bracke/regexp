@@ -31,10 +31,10 @@ begin
    Try ("");
    Try ("\x");
    Try ("[z-a]");
-   Try ("a|b");
+   Try ("a{}");
 
    Require_Error ("", R.Empty_Pattern, 0);
    Require_Error ("\x", R.Invalid_Escape, 2);
    Require_Error ("[z-a]", R.Invalid_Class_Range, 4);
-   Require_Error ("a|b", R.Unsupported_Syntax, 2);
+   Require_Error ("a{}", R.Invalid_Quantifier, 2);
 end Compile_Errors;

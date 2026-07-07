@@ -5,6 +5,11 @@ package body Regexp_Tests.Match_Tests is
    use Regexp;
    use Regexp_Tests.Support;
 
+   function Abort_Immediately return Boolean is
+   begin
+      return True;
+   end Abort_Immediately;
+
    procedure Test_Core_Matching (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
    begin
@@ -28,7 +33,93 @@ package body Regexp_Tests.Match_Tests is
       Check_Match ("^a*$", "aaa", Match_Ok, "entire anchored star", 1, 3);
       Check_Match ("a*", "", Match_Ok, "empty text zero length", 1, 0);
       Check_Match ("a*", "aaa", Match_Ok, "star longest", 1, 3);
+      Check_Match ("a*?", "aaa", Match_Ok, "lazy star shortest", 1, 0);
+      Check_Match ("a+?", "aaa", Match_Ok, "lazy plus shortest", 1, 1);
+      Check_Match ("a??a", "aaa", Match_Ok, "lazy optional shortest", 1, 1);
       Check_Match ("a*", "bbb", No_Match, "entire zero length over non-empty", Entire => True);
+      Check_Match ("cat|dog", "xxdogxx", Match_Ok, "alternation second branch", 3, 5);
+      Check_Match ("cat|dog", "xxcatxx", Match_Ok, "alternation first branch", 3, 5);
+      Check_Match ("cat|dog", "xxfoxxx", No_Match, "alternation no match");
+      Check_Match ("ab*|cd+", "xxabbb", Match_Ok, "alternation with quantifier", 3, 6);
+      Check_Match ("(?:cat|dog)", "xxdogxx", Match_Ok, "grouped alternation", 3, 5);
+      Check_Match ("()", "abc", Match_Ok, "empty capturing group", 1, 0);
+      Check_Match ("(?:)", "abc", Match_Ok, "empty non-capturing group", 1, 0);
+      Check_Match ("|a", "", Match_Ok, "leading empty alternative", 1, 0, Entire => True);
+      Check_Match ("a|", "", Match_Ok, "trailing empty alternative", 1, 0, Entire => True);
+      Check_Match ("a||b", "", Match_Ok, "middle empty alternative", 1, 0, Entire => True);
+      Check_Match ("x(?:ab)+y", "xxababyy", Match_Ok, "grouped plus quantifier", 2, 7);
+      Check_Match ("(?:ab){2,3}", "xxababab", Match_Ok, "grouped bounded repeat", 3, 8);
+      Check_Match ("(?:(?:ab)|cd)+", "xxabcd", Match_Ok, "nested grouped alternation", 3, 6);
+      Check_Match ("a(?=b)", "xab", Match_Ok, "positive lookahead", 2, 2);
+      Check_Match ("a(?=b)", "xac", No_Match, "positive lookahead negative case");
+      Check_Match ("a(?!b)", "xac", Match_Ok, "negative lookahead", 2, 2);
+      Check_Match ("a(?!b)", "xab", No_Match, "negative lookahead negative case");
+      Check_Match ("a(?!b)", "xa", Match_Ok, "negative lookahead at end", 2, 2);
+      Check_Match ("(?=ab)ab", "xxab", Match_Ok, "leading lookahead", 3, 4);
+      Check_Match ("(?<=a)b", "xab", Match_Ok, "positive lookbehind", 3, 3);
+      Check_Match ("(?<=a)b", "xcb", No_Match, "positive lookbehind negative case");
+      Check_Match ("(?<!a)b", "xcb", Match_Ok, "negative lookbehind", 3, 3);
+      Check_Match ("(?<!a)b", "xab", No_Match, "negative lookbehind negative case");
+      Check_Match ("(?<!a)b", "b", Match_Ok, "negative lookbehind at start", 1, 1);
+      Check_Match ("(?<=ab|cd)e", "xxcde", Match_Ok, "fixed-width alternation lookbehind", 5, 5);
+      Check_Match
+        ("(?i:a)",
+         "A",
+         Match_Ok,
+         "inline case-insensitive option",
+         1,
+         1,
+         Options => (Case_Sensitive => True, others => <>));
+      Check_Match ("(?-i:a)", "A", No_Match, "inline case-sensitive option");
+      Check_Match ("(?i:[a])", "A", Match_Ok, "inline option applies to class", 1, 1);
+      Check_Match
+        ("(?i:a)b",
+         "AB",
+         No_Match,
+         "inline option scope does not leak",
+         Options => (Case_Sensitive => True, others => <>));
+      Check_Match ("(?s:.)", Character'Val (10) & "x", Match_Ok, "inline dot newline", 1, 1);
+      Check_Match
+        ("(?-s:.)",
+         "" & Character'Val (10),
+         No_Match,
+         "inline dot newline disabled",
+         Options => (Dot_Matches_Newline => True, others => <>));
+      Check_Match ("(?m:^b)", "a" & Character'Val (10) & "b", Match_Ok, "inline multiline anchor", 3, 3);
+      Check_Match
+        ("(?-m:^b)",
+         "a" & Character'Val (10) & "b",
+         No_Match,
+         "inline multiline anchor disabled",
+         Options => (Multiline_Anchors => True, others => <>));
+      Check_Match ("(a)\1", "xaa", Match_Ok, "numbered backreference", 2, 3);
+      Check_Match ("(a)\1", "xab", No_Match, "numbered backreference negative case");
+      Check_Match ("(?<word>a)\k<word>", "xaa", Match_Ok, "named backreference", 2, 3);
+      Check_Match ("(?i:(a)\1)", "xAa", Match_Ok, "case-insensitive backreference", 2, 3);
+      Check_Match ("^(a)\1$", "aa", Match_Ok, "entire backreference", 1, 2, Entire => True);
+      Check_Match ("a*+a", "aaa", No_Match, "possessive star commits");
+      Check_Match ("a++a", "aaa", No_Match, "possessive plus commits");
+      Check_Match ("a?+a", "a", No_Match, "possessive optional commits");
+      Check_Match ("a{2,4}+a", "aaaa", No_Match, "possessive bounded repeat commits");
+      Check_Match ("a*+b", "aaab", Match_Ok, "possessive star success", 1, 4);
+      Check_Match ("(?>ab|a)b", "ab", No_Match, "atomic group commits first alternative");
+      Check_Match ("(?:ab|a)b", "ab", Match_Ok, "non-atomic group can use shorter alternative", 1, 2);
+      Check_Match ("\|", "a|b", Match_Ok, "escaped alternation literal", 2, 2);
+      Check_Match ("a{2}", "baac", Match_Ok, "exact repeat", 2, 3);
+      Check_Match ("a{2}", "bac", No_Match, "exact repeat too short");
+      Check_Match ("a{2,4}", "baaaaac", Match_Ok, "bounded repeat longest", 2, 5);
+      Check_Match ("a{2,4}?", "baaaaac", Match_Ok, "lazy bounded repeat shortest", 2, 3);
+      Check_Match ("a{2,4}", "bac", No_Match, "bounded repeat under minimum");
+      Check_Match ("a{2,}", "baaaaac", Match_Ok, "open repeat", 2, 6);
+      Check_Match ("a{2,}?", "baaaaac", Match_Ok, "lazy open repeat shortest", 2, 3);
+      Check_Match ("a{0,2}", "bbb", Match_Ok, "zero-minimum repeat", 1, 0);
+      Check_Match ("\d{3}", "ab1234", Match_Ok, "escape repeat", 3, 5);
+      Check_Match ("[a-c]{2}", "xxbc", Match_Ok, "class repeat", 3, 4);
+      Check_Match ("(?:ab)+?", "xxababyy", Match_Ok, "lazy grouped plus", 3, 4);
+      Check_Match ("^a{2,4}$", "aaa", Match_Ok, "anchored bounded repeat", 1, 3, Entire => True);
+      Check_Match ("\bcat\b", "a cat b", Match_Ok, "word boundary", 3, 5);
+      Check_Match ("\bcat\b", "scatter", No_Match, "word boundary negative");
+      Check_Match ("\Bcat\B", "scatters", Match_Ok, "non-word boundary", 2, 4);
    end Test_Core_Matching;
 
    procedure Test_Character_Classes (T : in out AUnit.Test_Cases.Test_Case'Class) is
@@ -47,6 +138,10 @@ package body Regexp_Tests.Match_Tests is
       Check_Match ("[-a]+", "xx-a", Match_Ok, "leading hyphen class match", 3, 4);
       Check_Match ("[\-\]]+", "xx-]", Match_Ok, "escaped class literals", 3, 4);
       Check_Match ("[a-cx]+", "yyabcx", Match_Ok, "mixed range and literal", 3, 6);
+      Check_Match ("[a-z&&[d-f]]+", "abcde", Match_Ok, "class intersection", 4, 5);
+      Check_Match ("[a-z&&[^aeiou]]+", "ate by", Match_Ok, "class intersection with negation", 2, 2);
+      Check_Match ("[a-z--[aeiou]]+", "seal", Match_Ok, "class subtraction", 1, 1);
+      Check_Match ("[a-z--[^aeiou]]+", "seal", Match_Ok, "class subtraction with negation", 2, 3);
       Check_Match ("[^a]+", "aaabb", Match_Ok, "negated class", 4, 5);
       Check_Match ("[^A]+", "aaa", No_Match, "case-insensitive negated class");
       Check_Match
@@ -74,6 +169,24 @@ package body Regexp_Tests.Match_Tests is
       Check_Match ("\s+", "ab" & Character'Val (10) & "cd", Match_Ok, "lf class", 3, 3);
       Check_Match ("\s+", "ab" & Character'Val (13) & "cd", Match_Ok, "cr class", 3, 3);
       Check_Match ("\S+", "  ab", Match_Ok, "non-space class", 3, 4);
+      Check_Match ("\p{digit}+", "ab12cd", Match_Ok, "unicode digit property", 3, 4);
+      Check_Match ("\p{digit}+", "abcd", No_Match, "unicode digit property mismatch");
+      Check_Match ("\P{digit}+", "ab12cd", Match_Ok, "inverse unicode digit property", 1, 2);
+      Check_Match ("\P{digit}+", "1234", No_Match, "inverse unicode digit property mismatch");
+      Check_Match
+        ("[\\p{digit}]",
+         "a1",
+         Match_Ok,
+         "unicode property inside class",
+         2,
+         2);
+      Check_Match
+        ("[^\\p{digit}]",
+         "a1",
+         Match_Ok,
+         "negated unicode property inside class",
+         1,
+         1);
    end Test_Character_Classes;
 
    procedure Test_Escaped_Literals (T : in out AUnit.Test_Cases.Test_Case'Class) is
@@ -167,6 +280,13 @@ package body Regexp_Tests.Match_Tests is
          "matches entire case sensitive",
          Options => (Case_Sensitive => True, others => <>),
          Entire => True);
+
+      Check_Match
+        ("a+",
+         "aaaaa",
+         Match_Limit_Exceeded,
+         "abort callback",
+         Options => (Abort_Callback => Abort_Immediately'Access, others => <>));
    end Test_Match_Options;
 
    overriding function Name (T : Test_Case) return AUnit.Message_String is

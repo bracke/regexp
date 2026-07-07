@@ -6,7 +6,7 @@ authors = ["Bent Bracke"]
 maintainers = ["Bent Bracke <bent@bracke.dk>"]
 maintainers-logins = ["bracke"]
 licenses = "MIT OR Apache-2.0 WITH LLVM-exception"
-website = ""
+website = "https://github.com/bracke/regexp"
 tags = ["regexp", "search", "match"]
 
 [[depends-on]]
