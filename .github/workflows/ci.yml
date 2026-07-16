@@ -11,18 +11,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install Ada toolchain
+      - name: Set up Alire
+        uses: alire-project/setup-alire@v5
+        with:
+          toolchain: gnat_native=15.2.1 gprbuild
+      - name: Install GNATprove
+        # gnatprove is a regular Alire crate, not a toolchain component; apt has no
+        # reliable gnatprove package, which is why the previous job failed at install.
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gnat gprbuild gnatprove
-          sudo apt-get install -y libaunit-dev || sudo apt-get install -y libaunit22-dev || sudo apt-get install -y libaunit24-dev
+          alr install gnatprove
+          echo "$HOME/.alire/bin" >> "$GITHUB_PATH"
       - name: Build library
-        run: gprbuild -P regexp.gpr
+        # Generates config/regexp_config.gpr, which regexp.gpr withs and which is
+        # gitignored (Alire-generated); a raw gprbuild would fail without it.
+        run: alr --non-interactive build
       - name: Run GNATprove
-        run: gnatprove -P regexp.gpr --level=4
+        run: alr exec -- gnatprove -P regexp.gpr --level=4
       - name: Build tests
-        run: gprbuild -P tests/tests.gpr
+        # tests is its own Alire root (it depends on aunit), so it builds from there.
+        working-directory: tests
+        run: alr --non-interactive build
       - name: Run tests
         run: ./tests/bin/tests
       - name: Build examples
-        run: gprbuild -P examples/examples.gpr
+        run: alr exec -- gprbuild -P examples/examples.gpr

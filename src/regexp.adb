@@ -1441,6 +1441,8 @@ package body Regexp is
                    and then Pos <= Nat (Pattern'Last) + 1
                    and then (if Good then Pos > Pos'Old)
       is
+         Matched_Posix : Boolean;
+
          procedure Apply_Posix_Class
            (Name   : String;
             Target : in out Character_Class;
@@ -1480,15 +1482,19 @@ package body Regexp is
             end if;
          end Apply_Posix_Class;
 
-         function Try_Posix_Class return Boolean is
+         --  A procedure, not a function: it advances Pos and sets Item/Single/Good, and
+         --  SPARK forbids a function with output globals. Matched reports whether the
+         --  cursor was on a POSIX class like [:alpha:].
+         procedure Try_Posix_Class (Matched : out Boolean) is
             Name_First : Natural;
             Name_Last  : Natural;
          begin
+            Matched := False;
             if Pos + 3 > Nat (Pattern'Last)
               or else Pattern (Positive (Pos)) /= '['
               or else Pattern (Positive (Pos + 1)) /= ':'
             then
-               return False;
+               return;
             end if;
 
             Name_First := Pos + 2;
@@ -1503,19 +1509,19 @@ package body Regexp is
             end loop;
 
             if Name_Last + 1 > Nat (Pattern'Last) or else Name_Last = Name_First then
-               return False;
+               return;
             end if;
 
             Item := (others => <>);
             Apply_Posix_Class (Pattern (Positive (Name_First) .. Positive (Name_Last - 1)), Item, Good);
             if not Good then
-               return False;
+               return;
             end if;
 
             Single := False;
             Pos := Name_Last + 2;
             Good := True;
-            return True;
+            Matched := True;
          end Try_Posix_Class;
       begin
          Item := (others => <>);
@@ -1527,7 +1533,8 @@ package body Regexp is
             return;
          end if;
 
-         if Try_Posix_Class then
+         Try_Posix_Class (Matched_Posix);
+         if Matched_Posix then
             return;
          elsif Pattern (Positive (Pos)) in 'p' | 'P' then
             Parse_Unicode_Property (Pattern, Pos, Item, Status, Offset, Good);
