@@ -26,7 +26,9 @@ jobs:
         # gitignored (Alire-generated); a raw gprbuild would fail without it.
         run: alr --non-interactive build
       - name: Run GNATprove
-        run: alr exec -- gnatprove -P regexp.gpr --level=4
+        # --level=4 is the full proof; -j0 parallelises and --timeout caps each VC
+        # so the run terminates instead of hitting the 6-hour job limit.
+        run: alr exec -- gnatprove -P regexp.gpr --level=4 -j0 --timeout=60
       - name: Build tests
         # tests is its own Alire root (it depends on aunit), so it builds from there.
         working-directory: tests
