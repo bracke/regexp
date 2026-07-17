@@ -27,8 +27,9 @@ jobs:
         run: alr --non-interactive build
       - name: Run GNATprove
         # --level=4 is the full proof; -j0 parallelises and --timeout caps each VC
-        # so the run terminates instead of hitting the 6-hour job limit.
-        run: alr exec -- gnatprove -P regexp.gpr --level=4 -j0 --timeout=60
+        # so the run terminates instead of hitting the 6-hour job limit. 20s is
+        # enough for the provable VCs; unprovable ones no longer burn a full minute.
+        run: alr exec -- gnatprove -P regexp.gpr --level=4 -j0 --timeout=20
       - name: Build tests
         # tests is its own Alire root (it depends on aunit), so it builds from there.
         working-directory: tests
