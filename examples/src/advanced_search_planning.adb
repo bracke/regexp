@@ -8,7 +8,6 @@ procedure Advanced_Search_Planning is
    use type R.Compile_Status;
    use type R.Find_All_Status;
    use type R.Match_Status;
-   use type R.Replacement_Validation_Status;
    use type R.Search_Strategy;
    use type R.Stream_Status;
 

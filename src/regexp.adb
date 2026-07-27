@@ -336,24 +336,28 @@ package body Regexp is
         or else Equals_No_Case (Normalized, "lm")
         or else Equals_No_Case (Normalized, "lo")
         or else Equals_No_Case (Normalized, "alpha")
-        or else Equals_No_Case (Normalized, "alphabetic") then
+        or else Equals_No_Case (Normalized, "alphabetic")
+      then
          Add_Alpha (Class);
 
       elsif Equals_No_Case (Normalized, "u")
         or else Equals_No_Case (Normalized, "upper")
-        or else Equals_No_Case (Normalized, "uppercase") then
+        or else Equals_No_Case (Normalized, "uppercase")
+      then
          Add_Upper (Class);
 
       elsif Equals_No_Case (Normalized, "l")
         or else Equals_No_Case (Normalized, "lower")
-        or else Equals_No_Case (Normalized, "lowercase") then
+        or else Equals_No_Case (Normalized, "lowercase")
+      then
          Add_Lower (Class);
 
       elsif Equals_No_Case (Normalized, "n")
         or else Equals_No_Case (Normalized, "nd")
         or else Equals_No_Case (Normalized, "digit")
         or else Equals_No_Case (Normalized, "decimal")
-        or else Equals_No_Case (Normalized, "number") then
+        or else Equals_No_Case (Normalized, "number")
+      then
          Add_Digit (Class);
 
       elsif Equals_No_Case (Normalized, "xdigit")
@@ -363,14 +367,16 @@ package body Regexp is
          Add_Xdigit (Class);
 
       elsif Equals_No_Case (Normalized, "space")
-        or else Equals_No_Case (Normalized, "whitespace") then
+        or else Equals_No_Case (Normalized, "whitespace")
+      then
          Add_Whitespace (Class);
 
       elsif Equals_No_Case (Normalized, "word") then
          Add_Word (Class);
 
       elsif Equals_No_Case (Normalized, "punct")
-        or else Equals_No_Case (Normalized, "punctuation") then
+        or else Equals_No_Case (Normalized, "punctuation")
+      then
          Add_Punct (Class);
 
       elsif Equals_No_Case (Normalized, "graph") then
@@ -380,7 +386,8 @@ package body Regexp is
          Add_Print (Class);
 
       elsif Equals_No_Case (Normalized, "cntrl")
-        or else Equals_No_Case (Normalized, "control") then
+        or else Equals_No_Case (Normalized, "control")
+      then
          Add_Cntrl (Class);
 
       elsif Equals_No_Case (Normalized, "blank") then

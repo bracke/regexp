@@ -103,8 +103,11 @@ package body Regexp_Tests.Api_Tests is
       Assert (Compile (Path_Extension_Pattern).Status = Compile_Ok, "path extension preset");
       Assert (Compile (Simple_Email_Pattern).Status = Compile_Ok, "simple email preset");
       Assert (Compile (Simple_URL_Pattern).Status = Compile_Ok, "simple url preset");
-      Assert (Digit_Class = "\d", "digit class constant");
-      Assert (Identifier_Start_Class = "[A-Z_]", "identifier start class constant");
+      --  Named constants: a runtime Assert folds to always-True. Compile_Time_Error
+      --  keeps the guard where it can actually fire if the constant changes.
+      pragma Compile_Time_Error (Digit_Class /= "\d", "digit class constant");
+      pragma Compile_Time_Error
+        (Identifier_Start_Class /= "[A-Z_]", "identifier start class constant");
       Assert (Find_First (Compile (UUID_Pattern).Expression, "550e8400-e29b-41d4-a716-446655440000").Status = Match_Ok,
               "uuid preset match");
       Assert (Find_First (Compile (Quoted_String_Pattern).Expression, """a\""b""").Status = Match_Ok,

@@ -31,4 +31,7 @@ jobs:
       - name: Run tests
         run: ./tests/bin/tests
       - name: Build examples
-        run: alr exec -- gprbuild -P examples/examples.gpr
+        # examples is its own Alire root; its gpr withs config/<crate>_config.gpr,
+        # which resolves only inside that crate. Build it there, as tests is built above.
+        working-directory: examples
+        run: alr --non-interactive build

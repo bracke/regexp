@@ -4,12 +4,16 @@
 /config/
 /tools/obj/
 /tools/bin/
+/tools/alire/
+/tools/config/
 /check_regexp/obj/
 /check_regexp/bin/
 /check_regexp/alire/
 /check_regexp/config/
 /examples/obj/
 /examples/bin/
+/examples/alire/
+/examples/config/
 /tests/obj/
 /tests/bin/
 /tests/alire/

@@ -51,7 +51,6 @@ procedure Check_Regexp is
          Quiet => False);
    end Require_Documented_Example;
 
-
    procedure Require_Release_Tree_Clean is
       use Ada.Strings.Unbounded;
 
@@ -114,9 +113,9 @@ procedure Check_Regexp is
       Open      : Boolean := False;
       Dir_Entry : Ada.Directories.Directory_Entry_Type;
       Filter    : constant Ada.Directories.Filter_Type :=
-        (Ada.Directories.Ordinary_File => True,
+        [Ada.Directories.Ordinary_File => True,
          Ada.Directories.Directory     => False,
-         Ada.Directories.Special_File  => False);
+         Ada.Directories.Special_File  => False];
    begin
       Project_Tools.Release_Checks.Require_GPR_Main_Inventory
         (Project_File       => Root & "/examples/examples.gpr",
@@ -682,7 +681,10 @@ begin
    Require_Text ("tools/check_all.adb", "gnatprove");
    Require_Text ("tools/check_all.adb", "--level=4");
    Require_Text ("tools/check_all.adb", "alr test");
-   Require_Text ("tools/tools.gpr", "project_tools.gpr");
+   --  tools/ is its own Alire crate now: the project_tools dependency is
+   --  declared in its manifest, and Alire writes the with into the generated
+   --  config gpr. Assert on the manifest, which is where the truth moved.
+   Require_Text ("tools/alire.toml", "project_tools");
    Require_Text ("docs/SPARK.md", "alr exec -- gnatprove -P regexp.gpr --level=4");
    Require_Text ("docs/SPARK.md", "mandatory for release validation");
    Require_Text ("docs/ai-usage.md", "tools/bin/check_all");

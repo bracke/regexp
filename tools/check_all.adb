@@ -84,18 +84,12 @@ begin
        new String'("-P"), new String'("tests.gpr")]);
    Run ("AUnit tests", Root & "/tests", "./bin/tests", []);
    Run ("alr test", Root, Alr, [1 => new String'("test")]);
-   Run
-     ("examples.gpr",
-      Root,
-      Alr,
-      [new String'("exec"), new String'("--"), new String'("gprbuild"),
-       new String'("-P"), new String'("examples/examples.gpr")]);
-   Run
-     ("tools.gpr",
-      Root,
-      Alr,
-      [new String'("exec"), new String'("--"), new String'("gprbuild"),
-       new String'("-P"), new String'("tools/tools.gpr")]);
+   --  examples/ and tools/ are their own Alire crates now, so their project
+   --  files with "config/<crate>_config.gpr" -- a path that only resolves
+   --  inside the crate's own Alire context. Build them the way check_regexp
+   --  below is built: from the crate directory, via alr.
+   Run ("examples.gpr", Root & "/examples", Alr, [1 => new String'("build")]);
+   Run ("tools.gpr", Root & "/tools", Alr, [1 => new String'("build")]);
    Run ("check_regexp build", Root & "/check_regexp", Alr, [1 => new String'("build")]);
    Run ("check_regexp", Root & "/check_regexp", "./bin/check_regexp", []);
 

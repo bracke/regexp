@@ -1,5 +1,5 @@
-name = "check_regexp"
-description = "release and documentation checks for regexp"
+name = "regexp_examples"
+description = "Worked examples for the regexp crate"
 version = "0.1.0-dev"
 
 authors = ["Bent Bracke"]
@@ -7,9 +7,24 @@ maintainers = ["Bent Bracke <bent@bracke.dk>"]
 maintainers-logins = ["bracke"]
 licenses = "MIT OR Apache-2.0 WITH LLVM-exception"
 website = ""
-tags = ["tooling", "checks"]
+tags = ["regexp", "examples"]
+project-files = ["examples.gpr"]
 
-executables = ["check_regexp"]
+executables = [
+   "basic_search",
+   "case_sensitivity",
+   "whole_word",
+   "find_from_offsets",
+   "find_all_matches",
+   "matches_entire",
+   "character_classes",
+   "preset_patterns",
+   "lookaround_options",
+   "search_workflow",
+   "advanced_search_planning",
+   "compile_errors",
+   "step_limit",
+]
 
 [[depends-on]]
 gnat_native = "=15.2.1"
@@ -17,14 +32,8 @@ gnat_native = "=15.2.1"
 [[depends-on]]
 regexp = "*"
 
-[[depends-on]]
-project_tools = "*"
-
 [[pins]]
-regexp = { path='..' }
-
-[[pins]]
-project_tools = { path='../../project_tools' }
+regexp = { path = '..' }
 
 # Build dependencies in the development profile (-Og) too, not the default
 # release (-O3), so this root and the parent share regexp object files rather
