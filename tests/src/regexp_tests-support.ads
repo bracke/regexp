@@ -26,4 +26,14 @@ package Regexp_Tests.Support is
       Last     : Natural := 0;
       Options  : Regexp.Match_Options := (others => <>);
       Entire   : Boolean := False);
+
+   --  Like Check_Match but compiles the pattern in UTF_8_Mode, so ".", classes,
+   --  and quantifiers match whole code points. First/Last remain byte offsets.
+   procedure Check_Match_Utf8
+     (Pattern  : String;
+      Text     : String;
+      Expected : Regexp.Match_Status;
+      Name     : String;
+      First    : Natural := 0;
+      Last     : Natural := 0);
 end Regexp_Tests.Support;

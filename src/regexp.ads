@@ -926,7 +926,8 @@ package Regexp is
    function Compile
      (Pattern            : String;
       Max_Pattern_Length : Positive := Default_Max_Pattern_Length;
-      Max_States         : Positive := Default_Max_States)
+      Max_States         : Positive := Default_Max_States;
+      Character_Mode     : Character_Mode_Type := ASCII_Mode)
       return Compile_Result
       with Pre => Pattern'Last < Positive'Last;
 
@@ -3021,9 +3022,42 @@ private
 
    type Character_Set is array (Character) of Boolean;
 
+   Max_Code_Point : constant := 16#10FFFF#;
+   type Code_Point is range 0 .. Max_Code_Point;
+   type Code_Interval is record
+      Lo : Code_Point := 0;
+      Hi : Code_Point := 0;
+   end record;
+
+   --  A class's members above U+00FF are held as code-point intervals. The
+   --  compile-time class carries up to Max_Class_Intervals of them inline; only
+   --  the few transient class temporaries in Parse_Class exist at once, so this
+   --  costs stack, not the 512-state array. An emitted Node_Class state instead
+   --  references a shared per-Regexp pool (see Class_Pool below), keeping State
+   --  small -- codepoints <= 255 stay in the byte-set Members either way.
+   Max_Class_Intervals : constant := 32;
+   subtype Class_Interval_Count is Natural range 0 .. Max_Class_Intervals;
+   type Class_Interval_Array is
+     array (Positive range 1 .. Max_Class_Intervals) of Code_Interval;
+
    type Character_Class is record
-      Negated : Boolean := False;
-      Members : Character_Set := [others => False];
+      Negated   : Boolean := False;
+      Members   : Character_Set := [others => False];
+      Hi_Count  : Class_Interval_Count := 0;
+      Hi_Ranges : Class_Interval_Array := [others => (others => 0)];
+   end record;
+
+   Max_Class_Pool : constant := 256;
+   subtype Class_Pool_Count is Natural range 0 .. Max_Class_Pool;
+   type Class_Pool_Array is array (Positive range 1 .. Max_Class_Pool) of Code_Interval;
+
+   --  The compact class stored in a State: the byte-set plus a (First, Count)
+   --  slice into the owning Regexp's Class_Pool for the > U+00FF intervals.
+   type Stored_Class is record
+      Negated  : Boolean := False;
+      Members  : Character_Set := [others => False];
+      Hi_First : Class_Pool_Count := 0;   --  1-based start in Class_Pool; 0 = none
+      Hi_Count : Class_Pool_Count := 0;
    end record;
 
    type Option_Mode is (Option_Inherit, Option_Off, Option_On);
@@ -3038,7 +3072,7 @@ private
    type State is record
       Kind  : Node_Kind := Node_Invalid;
       Ch    : Character := Character'Val (0);
-      Class : Character_Class;
+      Class : Stored_Class;
       Capture : Natural := 0;
       Modes : Scoped_Options := (others => Option_Inherit);
       Out_1 : State_Index := No_State;
@@ -3065,6 +3099,9 @@ private
       Source_Kind : Pattern_Source_Kind := Source_Unknown;
       Source_Length : Natural := 0;
       Source_Pattern : Source_Pattern_Buffer := [others => Character'Val (0)];
+      Class_Pool  : Class_Pool_Array := [others => (others => 0)];
+      Class_Pool_Used : Class_Pool_Count := 0;
+      Compiled_Mode : Character_Mode_Type := ASCII_Mode;
       States      : State_Array (1 .. Default_Max_States);
    end record;
 

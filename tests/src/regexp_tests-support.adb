@@ -64,4 +64,25 @@ package body Regexp_Tests.Support is
          Assert (Found.Last = Last, Name & " last");
       end if;
    end Check_Match;
+
+   procedure Check_Match_Utf8
+     (Pattern  : String;
+      Text     : String;
+      Expected : Match_Status;
+      Name     : String;
+      First    : Natural := 0;
+      Last     : Natural := 0)
+   is
+      Compiled : constant Compile_Result :=
+        Compile (Pattern, Character_Mode => UTF_8_Mode);
+      Found    : Match_Result;
+   begin
+      Assert (Compiled.Status = Compile_Ok, Name & " compiled");
+      Found := Find_First (Compiled.Expression, Text);
+      Assert (Found.Status = Expected, Name & " status got " & Status_Image (Found.Status));
+      if Expected = Match_Ok then
+         Assert (Found.First = First, Name & " first");
+         Assert (Found.Last = Last, Name & " last");
+      end if;
+   end Check_Match_Utf8;
 end Regexp_Tests.Support;

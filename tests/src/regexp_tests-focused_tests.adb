@@ -87,6 +87,32 @@ package body Regexp_Tests.Focused_Tests is
       Assert (Found.Steps_Used = 4, "focused step limit count");
    end Test_Step_Limit;
 
+   --  UTF-8 code-point matching (Character_Mode => UTF_8_Mode). Multibyte
+   --  literals are built from explicit bytes so the source encoding cannot fold
+   --  them to Latin-1. Offsets are byte offsets. é=C3 A9, α=CE B1, δ=CE B4,
+   --  ω=CF 89.
+   procedure Test_Utf8_Codepoints (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      E_Acute : constant String := Character'Val (16#C3#) & Character'Val (16#A9#);
+      Alpha   : constant String := Character'Val (16#CE#) & Character'Val (16#B1#);
+      Delta_C : constant String := Character'Val (16#CE#) & Character'Val (16#B4#);
+      Omega   : constant String := Character'Val (16#CF#) & Character'Val (16#89#);
+   begin
+      --  "." matches one whole code point (byte offsets 1 .. 2).
+      Check_Match_Utf8 ("^.$", E_Acute, Match_Ok, "utf8 dot one codepoint", 1, 2);
+      --  A quantifier counts code points: two dots over a two-code-point string.
+      Check_Match_Utf8 ("^..$", E_Acute & E_Acute, Match_Ok, "utf8 dot quantifier", 1, 4);
+      --  A positive code-point range: [α-ω] matches δ.
+      Check_Match_Utf8 ("[" & Alpha & "-" & Omega & "]", Delta_C, Match_Ok,
+                        "utf8 codepoint range", 1, 2);
+      --  A negated class matches a whole multibyte code point.
+      Check_Match_Utf8 ("[^a]", E_Acute, Match_Ok, "utf8 negated class", 1, 2);
+      --  A multibyte literal matches its own code point.
+      Check_Match_Utf8 (E_Acute, "x" & E_Acute & "y", Match_Ok, "utf8 literal", 2, 3);
+      --  An ASCII letter is not in the Greek range.
+      Check_Match_Utf8 ("[" & Alpha & "-" & Omega & "]", "x", No_Match, "utf8 range excludes ascii");
+   end Test_Utf8_Codepoints;
+
    overriding function Name (T : Test_Case) return AUnit.Message_String is
       pragma Unreferenced (T);
    begin
@@ -109,5 +135,6 @@ package body Regexp_Tests.Focused_Tests is
       Register_Routine (T, AUnit.Test_Cases.Test_Routine'(Test_Find_From'Access), "Focused find from");
       Register_Routine (T, AUnit.Test_Cases.Test_Routine'(Test_Invalid_Regexp'Access), "Focused invalid regexp");
       Register_Routine (T, AUnit.Test_Cases.Test_Routine'(Test_Step_Limit'Access), "Focused step limit");
+      Register_Routine (T, AUnit.Test_Cases.Test_Routine'(Test_Utf8_Codepoints'Access), "Focused UTF-8 codepoints");
    end Register_Tests;
 end Regexp_Tests.Focused_Tests;

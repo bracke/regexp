@@ -35,6 +35,69 @@ package body Regexp is
       Pos := Pos + 1;
    end Advance;
 
+   --  Decode the UTF-8 code point beginning at Text (Pos). Length is its byte
+   --  length, clamped so Pos + Length stays within Text; a stray, invalid, or
+   --  truncated sequence decodes as its single lead byte (lenient -- the awk
+   --  layer must tolerate arbitrary bytes rather than fail). Point is the code
+   --  point (its lead byte for the one-byte fallbacks).
+   procedure Decode_Utf8
+     (Text   : String;
+      Pos    : Positive;
+      Point  : out Code_Point;
+      Length : out Positive)
+     with Pre  => Pos in Text'Range,
+          Post => Length in 1 .. 4 and then Length - 1 <= Text'Last - Pos
+   is
+      Lead : constant Natural := Character'Pos (Text (Pos));
+      Need : Natural;
+      CP   : Natural;
+   begin
+      if Lead < 16#C0# then                       --  ASCII or a stray continuation
+         Point := Code_Point (Lead);
+         Length := 1;
+         return;
+      elsif Lead < 16#E0# then
+         Need := 2;
+         CP := Lead mod 16#20#;
+      elsif Lead < 16#F0# then
+         Need := 3;
+         CP := Lead mod 16#10#;
+      elsif Lead < 16#F8# then
+         Need := 4;
+         CP := Lead mod 16#08#;
+      else
+         Point := Code_Point (Lead);
+         Length := 1;
+         return;
+      end if;
+
+      if Text'Last - Pos < Need - 1 then           --  truncated at end of text
+         Point := Code_Point (Lead);
+         Length := 1;
+         return;
+      end if;
+      for K in 1 .. Need - 1 loop
+         declare
+            B : constant Natural := Character'Pos (Text (Pos + K));
+         begin
+            if B < 16#80# or else B >= 16#C0# then  --  not a continuation byte
+               Point := Code_Point (Lead);
+               Length := 1;
+               return;
+            end if;
+            CP := CP * 16#40# + (B mod 16#40#);
+         end;
+      end loop;
+
+      if CP > Max_Code_Point then                  --  overlong / out of range
+         Point := Code_Point (Lead);
+         Length := 1;
+      else
+         Point := Code_Point (CP);
+         Length := Need;
+      end if;
+   end Decode_Utf8;
+
    function Relative_Offset (First : Integer; Position : Natural) return Natural is
       Base : constant Natural := Nat (First);
    begin
@@ -474,15 +537,45 @@ package body Regexp is
       end loop;
    end Add_Range;
 
+   --  Append one code-point interval (> U+00FF) to a compile-time class; a full
+   --  interval table is dropped silently rather than corrupting the class.
+   procedure Add_Hi_Interval (Class : in out Character_Class; Lo, Hi : Code_Point) is
+   begin
+      if Hi >= Lo and then Class.Hi_Count < Max_Class_Intervals then
+         Class.Hi_Count := Class.Hi_Count + 1;
+         Class.Hi_Ranges (Class.Hi_Count) := (Lo, Hi);
+      end if;
+   end Add_Hi_Interval;
+
+   --  Add a code-point range: the <= U+00FF part goes in the byte-set Members,
+   --  the > U+00FF part becomes an interval.
+   procedure Add_Code_Range (Class : in out Character_Class; Lo, Hi : Code_Point) is
+   begin
+      if Lo <= 16#FF# then
+         for P in Natural (Lo) .. Natural (Code_Point'Min (Hi, 16#FF#)) loop
+            Class.Members (Character'Val (P)) := True;
+         end loop;
+      end if;
+      if Hi > 16#FF# then
+         Add_Hi_Interval (Class, Code_Point'Max (Lo, 16#100#), Hi);
+      end if;
+   end Add_Code_Range;
+
    procedure Merge (Target : in out Character_Class; Source : Character_Class) is
    begin
       if Source.Negated then
          for Ch in Character loop
             Target.Members (Ch) := Target.Members (Ch) or else not Source.Members (Ch);
          end loop;
+         --  A negated ASCII predefined class (\D, \W, \S) contains every code
+         --  point above U+00FF, so contribute that whole range.
+         Add_Hi_Interval (Target, 16#100#, Max_Code_Point);
       else
          for Ch in Character loop
             Target.Members (Ch) := Target.Members (Ch) or else Source.Members (Ch);
+         end loop;
+         for K in 1 .. Source.Hi_Count loop
+            Add_Hi_Interval (Target, Source.Hi_Ranges (K).Lo, Source.Hi_Ranges (K).Hi);
          end loop;
       end if;
    end Merge;
@@ -495,6 +588,12 @@ package body Regexp is
       for Ch in Character loop
          Target.Members (Ch) := Contains (Target, Ch) and then Contains (Source, Ch);
       end loop;
+      --  A code point > U+00FF survives only if Source also contains it; a
+      --  positive ASCII source contains none, so drop the high intervals, while
+      --  a negated ASCII source contains them all, so keep them.
+      if not Source.Negated then
+         Target.Hi_Count := 0;
+      end if;
       Target.Negated := False;
    end Intersect;
 
@@ -503,27 +602,123 @@ package body Regexp is
       for Ch in Character loop
          Target.Members (Ch) := Contains (Target, Ch) and then not Contains (Source, Ch);
       end loop;
+      --  A negated ASCII source contains every high code point, so subtracting it
+      --  removes them all; a positive ASCII source removes none.
+      if Source.Negated then
+         Target.Hi_Count := 0;
+      end if;
       Target.Negated := False;
    end Subtract;
 
-   function Matches_Class
-     (Class          : Character_Class;
-      Ch             : Character;
-      Case_Sensitive : Boolean)
-      return Boolean
+   --  Copy a compiled class into the shared per-Regexp interval pool, returning
+   --  the compact form stored in the Node_Class state. High intervals that would
+   --  overflow the pool are dropped rather than corrupting indices.
+   procedure Store_Class
+     (Expr   : in out Regexp;
+      C      : Character_Class;
+      Result : out Stored_Class)
+   is
+      First : Class_Pool_Count := 0;
+      Count : Class_Pool_Count := 0;
+   begin
+      if C.Hi_Count > 0 and then Expr.Class_Pool_Used < Max_Class_Pool then
+         First := Expr.Class_Pool_Used + 1;
+         for K in 1 .. C.Hi_Count loop
+            exit when Expr.Class_Pool_Used = Max_Class_Pool;
+            Expr.Class_Pool_Used := Expr.Class_Pool_Used + 1;
+            Expr.Class_Pool (Expr.Class_Pool_Used) := C.Hi_Ranges (K);
+            Count := Count + 1;
+         end loop;
+      end if;
+      if Count = 0 then
+         First := 0;
+      end if;
+      Result := (Negated  => C.Negated,
+                 Members  => C.Members,
+                 Hi_First => First,
+                 Hi_Count => Count);
+   end Store_Class;
+
+   --  Byte membership for a stored class (ASCII_Mode matching).
+   function Matches_Stored_Byte
+     (Class : Stored_Class; Ch : Character; Case_Sensitive : Boolean) return Boolean
    is
       Hit : Boolean := Class.Members (Ch);
    begin
       if not Case_Sensitive then
          Hit := Hit or else Class.Members (Fold (Ch)) or else Class.Members (Upper (Ch));
       end if;
+      return (if Class.Negated then not Hit else Hit);
+   end Matches_Stored_Byte;
 
-      if Class.Negated then
-         return not Hit;
+   --  Code-point membership for a stored class (UTF_8_Mode matching).
+   function Matches_Stored_CP
+     (Class          : Stored_Class;
+      Pool           : Class_Pool_Array;
+      CP             : Code_Point;
+      Case_Sensitive : Boolean)
+      return Boolean
+   is
+      Hit : Boolean := False;
+   begin
+      if CP <= 16#FF# then
+         declare
+            Ch : constant Character := Character'Val (Natural (CP));
+         begin
+            Hit := Class.Members (Ch);
+            if not Case_Sensitive then
+               Hit := Hit or else Class.Members (Fold (Ch)) or else Class.Members (Upper (Ch));
+            end if;
+         end;
+      elsif Class.Hi_Count > 0
+        and then Class.Hi_First >= 1
+        and then Class.Hi_First + Class.Hi_Count - 1 <= Max_Class_Pool
+      then
+         for K in Class.Hi_First .. Class.Hi_First + Class.Hi_Count - 1 loop
+            if CP >= Pool (K).Lo and then CP <= Pool (K).Hi then
+               Hit := True;
+            end if;
+         end loop;
       end if;
+      return (if Class.Negated then not Hit else Hit);
+   end Matches_Stored_CP;
 
-      return Hit;
-   end Matches_Class;
+   --  The number of bytes the matcher consumes at Pos: one code point in
+   --  UTF_8_Mode, one byte otherwise. Every consuming node and the outer step
+   --  use this same width, so the lockstep simulation stays consistent.
+   function Step_Width (Expr : Regexp; Text : String; Pos : Positive) return Positive
+     with Pre  => Pos in Text'Range,
+          Post => Step_Width'Result - 1 <= Text'Last - Pos
+   is
+      CP : Code_Point;
+      L  : Positive;
+   begin
+      if Expr.Compiled_Mode = UTF_8_Mode then
+         Decode_Utf8 (Text, Pos, CP, L);
+         return L;
+      else
+         return 1;
+      end if;
+   end Step_Width;
+
+   --  Whether a Node_Class state matches the input unit at Pos, honouring the
+   --  compiled character mode (code point in UTF_8_Mode, byte otherwise).
+   function Class_Matches
+     (Expr : Regexp; Node : State; Text : String; Pos : Positive; Case_Sensitive : Boolean)
+      return Boolean
+     with Pre => Pos in Text'Range
+   is
+      CP : Code_Point;
+      L  : Positive;   --  the code point's width; not needed here beyond decoding
+   begin
+      if Expr.Compiled_Mode = UTF_8_Mode then
+         Decode_Utf8 (Text, Pos, CP, L);
+         pragma Assert (L >= 1);   --  consume L (Decode guarantees 1 .. 4)
+         return Matches_Stored_CP (Node.Class, Expr.Class_Pool, CP, Case_Sensitive);
+      else
+         return Matches_Stored_Byte (Node.Class, Text (Pos), Case_Sensitive);
+      end if;
+   end Class_Matches;
 
    procedure Append_Out (Frag : in out Fragment; Item : Patch; Ok : out Boolean) is
    begin
@@ -660,7 +855,12 @@ package body Regexp is
       end if;
 
       Expression.States (Positive (Index)).Ch := Ch;
-      Expression.States (Positive (Index)).Class := Class;
+      declare
+         Stored : Stored_Class;
+      begin
+         Store_Class (Expression, Class, Stored);
+         Expression.States (Positive (Index)).Class := Stored;
+      end;
       Expression.States (Positive (Index)).Modes := Modes;
       Frag.Start := Index;
       Append_Out (Frag, (State => Index, Field => Patch_Out_1), Ok);
@@ -1431,15 +1631,18 @@ package body Regexp is
       Class   : out Character_Class;
       Status  : out Compile_Status;
       Offset  : out Natural;
-      Good    : out Boolean)
-      with Pre => Pos >= Nat (Pattern'First)
-                  and then Pos <= Nat (Pattern'Last)
-                  and then Pattern'Last < Positive'Last
+      Good    : out Boolean;
+      Mode    : Character_Mode_Type := ASCII_Mode)
+      with Pre  => Pos >= Nat (Pattern'First)
+                   and then Pos <= Nat (Pattern'Last)
+                   and then Pattern'Last < Positive'Last,
+           Post => Pos >= Pos'Old and then Pos <= Nat (Pattern'Last) + 1
    is
       procedure Read_Item
         (Item   : out Character_Class;
          Single : out Boolean;
          Ch     : out Character;
+         Code   : out Code_Point;
          Good   : out Boolean)
       with Pre  => Pos >= Nat (Pattern'First)
                    and then Pos <= Nat (Pattern'Last)
@@ -1534,6 +1737,7 @@ package body Regexp is
          Item := (others => <>);
          Single := False;
          Ch := Character'Val (0);
+         Code := 0;
          Good := False;
 
          if Pos < Positive'First or else Pos > Nat (Pattern'Last) then
@@ -1562,9 +1766,27 @@ package body Regexp is
                Offset := Pos;
                return;
             end if;
+            Code := Code_Point (Character'Pos (Ch));
             Advance (Pos);
+         elsif Mode = UTF_8_Mode
+           and then Character'Pos (Pattern (Positive (Pos))) >= 16#80#
+         then
+            --  A multibyte class member: read the whole code point.
+            declare
+               CP  : Code_Point;
+               Len : Positive;
+            begin
+               Decode_Utf8 (Pattern, Positive (Pos), CP, Len);
+               Ch := Pattern (Positive (Pos));
+               Code := CP;
+               Single := True;
+               Add_Code_Range (Item, CP, CP);
+               Pos := Pos + Len;
+               Good := True;
+            end;
          else
             Ch := Pattern (Positive (Pos));
+            Code := Code_Point (Character'Pos (Ch));
             Single := True;
             Item.Members (Ch) := True;
             Advance (Pos);
@@ -1579,9 +1801,12 @@ package body Regexp is
       End_Single : Boolean;
       Ch         : Character;
       End_Ch     : Character;
+      Code_Start : Code_Point;
+      Code_End   : Code_Point;
       Item_Good  : Boolean;
       Had_Item   : Boolean := False;
       Negated    : Boolean := False;
+      Enter_Pos  : constant Natural := Pos;   --  entry Pos (= Pos'Old), for the Post
    begin
       Class := (others => <>);
       Status := Compile_Ok;
@@ -1597,10 +1822,11 @@ package body Regexp is
       while Pos <= Nat (Pattern'Last) and then Pattern (Positive (Pos)) /= ']' loop
          pragma Loop_Invariant (Pos >= Nat (Pattern'First));
          pragma Loop_Invariant (Pos >= Positive'First);
+         pragma Loop_Invariant (Pos >= Enter_Pos);
          pragma Loop_Invariant (Pos <= Nat (Pattern'Last) + 1);
          pragma Loop_Variant (Increases => Pos);
 
-         Read_Item (Item, Single, Ch, Item_Good);
+         Read_Item (Item, Single, Ch, Code_Start, Item_Good);
          if not Item_Good then
             return;
          end if;
@@ -1623,17 +1849,17 @@ package body Regexp is
             end if;
 
             Advance (Pos);
-            Read_Item (Range_End, End_Single, End_Ch, Item_Good);
+            Read_Item (Range_End, End_Single, End_Ch, Code_End, Item_Good);
             if not Item_Good then
                return;
             end if;
-            if Range_End.Negated or else not End_Single or else Character'Pos (Ch) > Character'Pos (End_Ch) then
+            if Range_End.Negated or else not End_Single or else Code_Start > Code_End then
                Status := Invalid_Class_Range;
                Offset := (if Pos = 0 then 0 else Pos - 1);
                return;
             end if;
             Term := (others => <>);
-            Add_Range (Term, Ch, End_Ch);
+            Add_Code_Range (Term, Code_Start, Code_End);
          end if;
 
          Merge (Class, Term);
@@ -1646,7 +1872,7 @@ package body Regexp is
            and then Pattern (Positive (Pos + 2)) = '['
          then
             Pos := Pos + 2;
-            Parse_Class (Pattern, Pos, Range_End, Status, Offset, Item_Good);
+            Parse_Class (Pattern, Pos, Range_End, Status, Offset, Item_Good, Mode);
             if not Item_Good then
                return;
             end if;
@@ -1658,7 +1884,7 @@ package body Regexp is
            and then Pattern (Positive (Pos + 2)) = '['
          then
             Pos := Pos + 2;
-            Parse_Class (Pattern, Pos, Range_End, Status, Offset, Item_Good);
+            Parse_Class (Pattern, Pos, Range_End, Status, Offset, Item_Good, Mode);
             if not Item_Good then
                return;
             end if;
@@ -1767,7 +1993,8 @@ package body Regexp is
    function Compile
      (Pattern            : String;
       Max_Pattern_Length : Positive := Default_Max_Pattern_Length;
-      Max_States         : Positive := Default_Max_States)
+      Max_States         : Positive := Default_Max_States;
+      Character_Mode     : Character_Mode_Type := ASCII_Mode)
       return Compile_Result
    is
       Result : Compile_Result;
@@ -2204,7 +2431,7 @@ package body Regexp is
                   declare
                      Before_Class : constant Natural := Pos;
                   begin
-                     Parse_Class (Pattern, Pos, Class, Local_Status, Local_Offset, Ok);
+                     Parse_Class (Pattern, Pos, Class, Local_Status, Local_Offset, Ok, Character_Mode);
                      if not Ok then
                         Status := Local_Status;
                         Offset := Relative_Offset (Pattern'First, Local_Offset);
@@ -2290,10 +2517,29 @@ package body Regexp is
                   end if;
 
                when others =>
-                  Kind := Node_Char;
-                  Ch := Pattern (Positive (Pos));
-                  Advance (Pos);
-                  Atom_Fragment (Result.Expression, Kind, Max_States, Atom, Ch, Class, Modes);
+                  if Character_Mode = UTF_8_Mode
+                    and then Character'Pos (Pattern (Positive (Pos))) >= 16#80#
+                  then
+                     --  A multibyte literal must match a whole code point; a
+                     --  lockstep-by-codepoint automaton cannot express it as a
+                     --  sequence of byte Node_Char nodes, so emit a single-member
+                     --  class node instead.
+                     declare
+                        CP  : Code_Point;
+                        Len : Positive;
+                     begin
+                        Decode_Utf8 (Pattern, Positive (Pos), CP, Len);
+                        Class := (others => <>);
+                        Add_Code_Range (Class, CP, CP);
+                        Pos := Pos + Len;
+                        Atom_Fragment (Result.Expression, Node_Class, Max_States, Atom, Ch, Class, Modes);
+                     end;
+                  else
+                     Kind := Node_Char;
+                     Ch := Pattern (Positive (Pos));
+                     Advance (Pos);
+                     Atom_Fragment (Result.Expression, Kind, Max_States, Atom, Ch, Class, Modes);
+                  end if;
             end case;
 
             if Parsed_Atom then
@@ -2471,6 +2717,7 @@ package body Regexp is
       Ok           : Boolean;
    begin
       Result.Expression := (others => <>);
+      Result.Expression.Compiled_Mode := Character_Mode;
 
       if Pattern'Length = 0 then
          Result.Status := Empty_Pattern;
@@ -3857,7 +4104,8 @@ package body Regexp is
                         if Equal_Chars
                             (Node.Ch, Text (Positive (Pos)), Effective_Case_Sensitive (Node, Options))
                         then
-                           Add_Assertion_State (Next, Node.Out_1, Pos + 1);
+                           Add_Assertion_State
+                             (Next, Node.Out_1, Pos + Step_Width (Expression, Text, Positive (Pos)));
                         end if;
 
                      when Node_Any =>
@@ -3866,14 +4114,16 @@ package body Regexp is
                             (Text (Positive (Pos)) /= Character'Val (10)
                              and then Text (Positive (Pos)) /= Character'Val (13))
                         then
-                           Add_Assertion_State (Next, Node.Out_1, Pos + 1);
+                           Add_Assertion_State
+                             (Next, Node.Out_1, Pos + Step_Width (Expression, Text, Positive (Pos)));
                         end if;
 
                      when Node_Class =>
-                        if Matches_Class
-                            (Node.Class, Text (Positive (Pos)), Effective_Case_Sensitive (Node, Options))
+                        if Class_Matches
+                            (Expression, Node, Text, Positive (Pos), Effective_Case_Sensitive (Node, Options))
                         then
-                           Add_Assertion_State (Next, Node.Out_1, Pos + 1);
+                           Add_Assertion_State
+                             (Next, Node.Out_1, Pos + Step_Width (Expression, Text, Positive (Pos)));
                         end if;
 
                      when others =>
@@ -3888,7 +4138,7 @@ package body Regexp is
          end if;
 
          Current := Next;
-         Advance (Pos);
+         Pos := Pos + Step_Width (Expression, Text, Positive (Pos));
       end loop;
    end Check_Lookahead;
 
@@ -4109,7 +4359,8 @@ package body Regexp is
                         if Equal_Chars
                             (Node.Ch, Text (Positive (Pos)), Effective_Case_Sensitive (Node, Options))
                         then
-                           Add_Atomic_State (Next, Node.Out_1, Pos + 1);
+                           Add_Atomic_State
+                             (Next, Node.Out_1, Pos + Step_Width (Expression, Text, Positive (Pos)));
                         end if;
 
                      when Node_Any =>
@@ -4118,14 +4369,16 @@ package body Regexp is
                             (Text (Positive (Pos)) /= Character'Val (10)
                              and then Text (Positive (Pos)) /= Character'Val (13))
                         then
-                           Add_Atomic_State (Next, Node.Out_1, Pos + 1);
+                           Add_Atomic_State
+                             (Next, Node.Out_1, Pos + Step_Width (Expression, Text, Positive (Pos)));
                         end if;
 
                      when Node_Class =>
-                        if Matches_Class
-                            (Node.Class, Text (Positive (Pos)), Effective_Case_Sensitive (Node, Options))
+                        if Class_Matches
+                            (Expression, Node, Text, Positive (Pos), Effective_Case_Sensitive (Node, Options))
                         then
-                           Add_Atomic_State (Next, Node.Out_1, Pos + 1);
+                           Add_Atomic_State
+                             (Next, Node.Out_1, Pos + Step_Width (Expression, Text, Positive (Pos)));
                         end if;
 
                      when others =>
@@ -4140,7 +4393,7 @@ package body Regexp is
          end if;
 
          Current := Next;
-         Advance (Pos);
+         Pos := Pos + Step_Width (Expression, Text, Positive (Pos));
       end loop;
    end Check_Atomic;
 
@@ -4626,6 +4879,7 @@ package body Regexp is
       Options     : Match_Options;
       Found       : out Match_Result;
       Captures    : out Capture_Set)
+      with Pre => Text'Last < Positive'Last
    is
       Current      : Capture_Thread_Set := [others => <>];
       Next         : Capture_Thread_Set;
@@ -4633,6 +4887,7 @@ package body Regexp is
       Steps        : Natural := 0;
       Step_Limited : Boolean := False;
       Pos          : Natural := Start_Pos;
+      W            : Positive := 1;   --  width in bytes of the input unit at Pos
       Matched      : Boolean;
       Best_Matched : Boolean := False;
       Best_Last    : Natural := 0;
@@ -4691,6 +4946,7 @@ package body Regexp is
          end if;
 
          exit when Pos > Nat (Text'Last);
+         W := Step_Width (Expression, Text, Positive (Pos));
 
          Next := [others => <>];
          for I in 1 .. Expression.State_Count loop
@@ -4708,7 +4964,8 @@ package body Regexp is
                          (Node.Ch, Text (Positive (Pos)), Effective_Case_Sensitive (Node, Options))
                      then
                         Add_Capture_State
-                          (Expression, Next, Node.Out_1, Pos + 1, Text, Options,
+                          (Expression, Next, Node.Out_1,
+                           Pos + W, Text, Options,
                            Current (I).Captures, Steps, Step_Limited);
                      end if;
 
@@ -4719,16 +4976,18 @@ package body Regexp is
                           and then Text (Positive (Pos)) /= Character'Val (13))
                      then
                         Add_Capture_State
-                          (Expression, Next, Node.Out_1, Pos + 1, Text, Options,
+                          (Expression, Next, Node.Out_1,
+                           Pos + W, Text, Options,
                            Current (I).Captures, Steps, Step_Limited);
                      end if;
 
                   when Node_Class =>
-                     if Matches_Class
-                         (Node.Class, Text (Positive (Pos)), Effective_Case_Sensitive (Node, Options))
+                     if Class_Matches
+                         (Expression, Node, Text, Positive (Pos), Effective_Case_Sensitive (Node, Options))
                      then
                         Add_Capture_State
-                          (Expression, Next, Node.Out_1, Pos + 1, Text, Options,
+                          (Expression, Next, Node.Out_1,
+                           Pos + W, Text, Options,
                            Current (I).Captures, Steps, Step_Limited);
                      end if;
 
@@ -4757,7 +5016,7 @@ package body Regexp is
          end if;
 
          Current := Next;
-         Advance (Pos);
+         Pos := Pos + W;
       end loop;
 
       if Best_Matched then
@@ -4779,6 +5038,7 @@ package body Regexp is
       Require_End : Boolean;
       Options     : Match_Options)
       return Match_Result
+      with Pre => Text'Last < Positive'Last
    is
       Steps        : Natural := 0;
       Step_Limited : Boolean := False;
@@ -4897,7 +5157,7 @@ package body Regexp is
                  and then Equal_Chars
                    (Node.Ch, Text (Positive (Position)), Effective_Case_Sensitive (Node, Options))
                then
-                  Explore (Node.Out_1, Position + 1);
+                  Explore (Node.Out_1, Position + Step_Width (Expression, Text, Positive (Position)));
                end if;
 
             when Node_Any =>
@@ -4908,15 +5168,15 @@ package body Regexp is
                       (Text (Positive (Position)) /= Character'Val (10)
                        and then Text (Positive (Position)) /= Character'Val (13)))
                then
-                  Explore (Node.Out_1, Position + 1);
+                  Explore (Node.Out_1, Position + Step_Width (Expression, Text, Positive (Position)));
                end if;
 
             when Node_Class =>
                if Position <= Nat (Text'Last)
-                 and then Matches_Class
-                   (Node.Class, Text (Positive (Position)), Effective_Case_Sensitive (Node, Options))
+                 and then Class_Matches
+                   (Expression, Node, Text, Positive (Position), Effective_Case_Sensitive (Node, Options))
                then
-                  Explore (Node.Out_1, Position + 1);
+                  Explore (Node.Out_1, Position + Step_Width (Expression, Text, Positive (Position)));
                end if;
 
             when others =>
@@ -4951,12 +5211,14 @@ package body Regexp is
       Require_End : Boolean;
       Options     : Match_Options)
       return Match_Result
+      with Pre => Text'Last < Positive'Last
    is
       Current      : Active_Set := [others => False];
       Next         : Active_Set;
       Steps        : Natural := 0;
       Step_Limited : Boolean := False;
       Pos          : Natural := Start_Pos;
+      W            : Positive := 1;   --  width in bytes of the input unit at Pos
       Matched      : Boolean;
       Best_Matched : Boolean := False;
       Best_Last    : Natural := 0;
@@ -5021,6 +5283,7 @@ package body Regexp is
          end if;
 
          exit when Pos > Nat (Text'Last);
+         W := Step_Width (Expression, Text, Positive (Pos));
 
          Next := [others => False];
          for I in 1 .. Expression.State_Count loop
@@ -5036,7 +5299,7 @@ package body Regexp is
                      if Equal_Chars
                          (Node.Ch, Text (Positive (Pos)), Effective_Case_Sensitive (Node, Options))
                      then
-                        Add_State (Expression, Next, Node.Out_1, Pos + 1, Text, Options, Steps, Step_Limited);
+                        Add_State (Expression, Next, Node.Out_1, Pos + W, Text, Options, Steps, Step_Limited);
                      end if;
 
                   when Node_Any =>
@@ -5045,14 +5308,14 @@ package body Regexp is
                          (Text (Positive (Pos)) /= Character'Val (10)
                           and then Text (Positive (Pos)) /= Character'Val (13))
                      then
-                        Add_State (Expression, Next, Node.Out_1, Pos + 1, Text, Options, Steps, Step_Limited);
+                        Add_State (Expression, Next, Node.Out_1, Pos + W, Text, Options, Steps, Step_Limited);
                      end if;
 
                   when Node_Class =>
-                     if Matches_Class
-                         (Node.Class, Text (Positive (Pos)), Effective_Case_Sensitive (Node, Options))
+                     if Class_Matches
+                         (Expression, Node, Text, Positive (Pos), Effective_Case_Sensitive (Node, Options))
                      then
-                        Add_State (Expression, Next, Node.Out_1, Pos + 1, Text, Options, Steps, Step_Limited);
+                        Add_State (Expression, Next, Node.Out_1, Pos + W, Text, Options, Steps, Step_Limited);
                      end if;
 
                   when others =>
@@ -5070,7 +5333,7 @@ package body Regexp is
          end if;
 
          Current := Next;
-         Advance (Pos);
+         Pos := Pos + W;
       end loop;
 
       if Best_Matched then
