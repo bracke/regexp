@@ -7,6 +7,7 @@ maintainers = ["Bent Bracke <bent@bracke.dk>"]
 maintainers-logins = ["bracke"]
 licenses = "MIT"
 website = "https://github.com/bracke/regexp"
+long-description = "Regexp is a small bounded regular-expression engine for Ada. It is designed for editor and project-search style workloads where predictable limits matter: compiled patterns have bounded size, matching has a configurable step limit, and the public API is SPARK-compatible."
 tags = ["regexp", "search", "match"]
 
 [[depends-on]]
