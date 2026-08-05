@@ -5031,6 +5031,287 @@ package body Regexp is
       Found := (Status => No_Match, Steps_Used => Steps, others => <>);
    end Run_From_With_Captures;
 
+   --  Recursion depth at which a backtracking match gives up.
+   --
+   --  Depth grows with the number of input units one candidate path consumes,
+   --  so a pattern such as \(a*\)\1 over a long span can nest deeply. Running
+   --  out of stack would be a crash; stopping here is a determinate
+   --  Match_Limit_Exceeded that the caller already knows how to report. The
+   --  value leaves room for spans far longer than any realistic
+   --  backreferenced pattern matches, while keeping worst-case stack use to a
+   --  few megabytes.
+   Max_Backtrack_Depth : constant Positive := 20_000;
+
+   --  Match by backtracking, carrying captures along each candidate path.
+   --
+   --  A backreference is not a regular construct: what it matches depends on
+   --  what an earlier group captured on the same path, so its width is not
+   --  known until that path is taken. The lock-step simulation used elsewhere
+   --  advances every live thread by one input unit at a time and therefore
+   --  cannot represent it -- a backreference thread would be treated as
+   --  having consumed a single unit whatever it actually matched.
+   --
+   --  This walker instead explores one path at a time with its own position
+   --  and its own capture set, which is what lets a backreference consume the
+   --  whole captured span. It is used only when the expression really
+   --  contains a backreference; every other pattern keeps the linear-time
+   --  path, so the cost of backtracking is confined to the feature that
+   --  requires it.
+   procedure Run_From_Backtracking
+     (Expression  : Regexp;
+      Text        : String;
+      Start_Pos   : Positive;
+      Require_End : Boolean;
+      Options     : Match_Options;
+      Found       : out Match_Result;
+      Captures    : out Capture_Set)
+      with Pre => Text'Last < Positive'Last
+   is
+      Steps         : Natural := 0;
+      Step_Limited  : Boolean := False;
+      Best_Matched  : Boolean := False;
+      Best_Last     : Natural := 0;
+      Best_Captures : Capture_Set := [others => <>];
+      Live          : Capture_Set := [others => <>];
+
+      --  Explore one path. Live carries the captures recorded so far; a
+      --  capture node changes one field, explores, and puts the old value
+      --  back, so a path that fails leaves nothing behind for its sibling.
+      procedure Explore (Index : State_Index; Position : Natural; Depth : Positive);
+
+      -------------
+      -- Explore --
+      -------------
+
+      procedure Explore (Index : State_Index; Position : Natural; Depth : Positive) is
+         Passed : Boolean;
+      begin
+         if Step_Limited or else Index = No_State then
+            return;
+         end if;
+
+         if Depth >= Max_Backtrack_Depth then
+            Step_Limited := True;
+            return;
+         end if;
+
+         Consume_Step (Options, Steps, Step_Limited);
+         if Step_Limited then
+            return;
+         end if;
+
+         declare
+            Node : State renames Expression.States (Positive (Index));
+         begin
+            case Node.Kind is
+               when Node_Match =>
+                  if not Require_End or else Position > Nat (Text'Last) then
+                     declare
+                        Last : constant Natural :=
+                          (if Position = 0 then 0 else Position - 1);
+                     begin
+                        if not Options.Whole_Word
+                          or else Whole_Word_Passes (Text, Start_Pos, Last, Options)
+                        then
+                           if not Best_Matched
+                             or else Last > Best_Last
+                             or else Expression.Prefer_First_Match
+                           then
+                              Best_Matched := True;
+                              Best_Last := Last;
+                              Best_Captures := Live;
+                           end if;
+                        end if;
+                     end;
+                  end if;
+
+               when Node_Split =>
+                  Explore (Node.Out_1, Position, Depth + 1);
+                  if not Expression.Prefer_First_Match or else not Best_Matched then
+                     Explore (Node.Out_2, Position, Depth + 1);
+                  end if;
+
+               when Node_Start_Line =>
+                  if Position = Nat (Text'First)
+                    or else
+                      (Effective_Multiline_Anchors (Node, Options)
+                       and then Position > Nat (Text'First)
+                       and then Position <= Nat (Text'Last) + 1
+                       and then
+                         (Text (Positive (Position - 1)) = Character'Val (10)
+                          or else Text (Positive (Position - 1)) = Character'Val (13)))
+                  then
+                     Explore (Node.Out_1, Position, Depth + 1);
+                  end if;
+
+               when Node_End_Line =>
+                  if Position > Nat (Text'Last)
+                    or else
+                      (Effective_Multiline_Anchors (Node, Options)
+                       and then Position <= Nat (Text'Last)
+                       and then
+                         (Text (Positive (Position)) = Character'Val (10)
+                          or else Text (Positive (Position)) = Character'Val (13)))
+                  then
+                     Explore (Node.Out_1, Position, Depth + 1);
+                  end if;
+
+               when Node_Word_Boundary =>
+                  if Word_Boundary_Passes (Text, Position, Options) then
+                     Explore (Node.Out_1, Position, Depth + 1);
+                  end if;
+
+               when Node_Not_Word_Boundary =>
+                  if not Word_Boundary_Passes (Text, Position, Options) then
+                     Explore (Node.Out_1, Position, Depth + 1);
+                  end if;
+
+               when Node_Lookahead_Positive =>
+                  Check_Lookahead
+                    (Expression, Node.Out_2, Text, Position, Options, Steps, Step_Limited, Passed);
+                  if Passed then
+                     Explore (Node.Out_1, Position, Depth + 1);
+                  end if;
+
+               when Node_Lookahead_Negative =>
+                  Check_Lookahead
+                    (Expression, Node.Out_2, Text, Position, Options, Steps, Step_Limited, Passed);
+                  if not Passed and then not Step_Limited then
+                     Explore (Node.Out_1, Position, Depth + 1);
+                  end if;
+
+               when Node_Lookbehind_Positive =>
+                  Check_Lookbehind
+                    (Expression, Node.Out_2, Node.Capture, Text, Position, Options,
+                     Steps, Step_Limited, Passed);
+                  if Passed then
+                     Explore (Node.Out_1, Position, Depth + 1);
+                  end if;
+
+               when Node_Lookbehind_Negative =>
+                  Check_Lookbehind
+                    (Expression, Node.Out_2, Node.Capture, Text, Position, Options,
+                     Steps, Step_Limited, Passed);
+                  if not Passed and then not Step_Limited then
+                     Explore (Node.Out_1, Position, Depth + 1);
+                  end if;
+
+               when Node_Char =>
+                  if Position <= Nat (Text'Last)
+                    and then Equal_Chars
+                      (Node.Ch, Text (Positive (Position)),
+                       Effective_Case_Sensitive (Node, Options))
+                  then
+                     Explore
+                       (Node.Out_1,
+                        Position + Step_Width (Expression, Text, Positive (Position)),
+                        Depth + 1);
+                  end if;
+
+               when Node_Any =>
+                  if Position <= Nat (Text'Last)
+                    and then
+                      (Effective_Dot_Matches_Newline (Node, Options)
+                       or else
+                         (Text (Positive (Position)) /= Character'Val (10)
+                          and then Text (Positive (Position)) /= Character'Val (13)))
+                  then
+                     Explore
+                       (Node.Out_1,
+                        Position + Step_Width (Expression, Text, Positive (Position)),
+                        Depth + 1);
+                  end if;
+
+               when Node_Class =>
+                  if Position <= Nat (Text'Last)
+                    and then Class_Matches
+                      (Expression, Node, Text, Positive (Position),
+                       Effective_Case_Sensitive (Node, Options))
+                  then
+                     Explore
+                       (Node.Out_1,
+                        Position + Step_Width (Expression, Text, Positive (Position)),
+                        Depth + 1);
+                  end if;
+
+               when Node_Capture_Start =>
+                  if Node.Capture in 1 .. Max_Captures then
+                     declare
+                        Slot : Text_Range renames Live (Positive (Node.Capture));
+                        Saved : constant Natural := Slot.First;
+                     begin
+                        Slot.First := Relative_Offset (Text'First, Position);
+                        Explore (Node.Out_1, Position, Depth + 1);
+                        Slot.First := Saved;
+                     end;
+                  else
+                     Explore (Node.Out_1, Position, Depth + 1);
+                  end if;
+
+               when Node_Capture_End =>
+                  if Node.Capture in 1 .. Max_Captures then
+                     declare
+                        Slot : Text_Range renames Live (Positive (Node.Capture));
+                        Saved : constant Natural := Slot.Last;
+                     begin
+                        Slot.Last :=
+                          (if Position = 0
+                           then 0
+                           else Relative_Offset (Text'First, Position - 1));
+                        Explore (Node.Out_1, Position, Depth + 1);
+                        Slot.Last := Saved;
+                     end;
+                  else
+                     Explore (Node.Out_1, Position, Depth + 1);
+                  end if;
+
+               when Node_Backreference =>
+                  declare
+                     Backref_Ok   : Boolean;
+                     Backref_Next : Natural;
+                  begin
+                     --  The captured span is known on this path, so the
+                     --  reference consumes exactly as much text as it names.
+                     Match_Backreference
+                       (Node, Text, Position, Options, Live, Backref_Ok, Backref_Next);
+                     if Backref_Ok then
+                        Explore (Node.Out_1, Backref_Next, Depth + 1);
+                     end if;
+                  end;
+
+               when others =>
+                  null;
+            end case;
+         end;
+      end Explore;
+
+   begin
+      Captures := [others => <>];
+
+      if not Expression.Valid then
+         Found := (Status => Invalid_Regexp, others => <>);
+         return;
+      elsif Start_Pos < Nat (Text'First) or else Start_Pos > Nat (Text'Last) + 1 then
+         Found := (Status => No_Match, others => <>);
+         return;
+      end if;
+
+      Explore (Expression.Start, Start_Pos, 1);
+
+      if Step_Limited then
+         Found := (Status => Match_Limit_Exceeded, Steps_Used => Steps, others => <>);
+      elsif Best_Matched then
+         Captures := Best_Captures;
+         Found :=
+           (Status     => Match_Ok,
+            First      => Relative_First (Text, Start_Pos),
+            Last       => Relative_Last (Text, Best_Last),
+            Steps_Used => Steps);
+      else
+         Found := (Status => No_Match, Steps_Used => Steps, others => <>);
+      end if;
+   end Run_From_Backtracking;
+
    function Run_From_Atomic
      (Expression  : Regexp;
       Text        : String;
@@ -5236,7 +5517,9 @@ package body Regexp is
       end if;
 
       if Expression.Has_Backreferences then
-         Run_From_With_Captures
+         --  A backreference consumes what an earlier group captured on the
+         --  same path, which only a backtracking walk can represent.
+         Run_From_Backtracking
            (Expression, Text, Start_Pos, Require_End, Options, Capture_Found, Capture_Set_Value);
          return Capture_Found;
       end if;
@@ -5579,6 +5862,9 @@ package body Regexp is
          if Expression.Has_Atomic then
             Found := Run_From_Atomic (Expression, Text, Start, False, Run_Options);
             Local_Captures := [others => <>];
+         elsif Expression.Has_Backreferences then
+            Run_From_Backtracking
+              (Expression, Text, Start, False, Run_Options, Found, Local_Captures);
          else
             Run_From_With_Captures (Expression, Text, Start, False, Run_Options, Found, Local_Captures);
          end if;

@@ -289,6 +289,50 @@ package body Regexp_Tests.Match_Tests is
          Options => (Abort_Callback => Abort_Immediately'Access, others => <>));
    end Test_Match_Options;
 
+   procedure Test_Backreferences (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+   begin
+      --  A backreference must consume the whole captured span, not one unit
+      --  of it. A single-character group cannot tell those two apart, so
+      --  every case here captures more than one character.
+      Check_Match ("(ab)\1", "abab", Match_Ok, "two-character backreference", 1, 4);
+      Check_Match ("(abc)\1", "abcabc", Match_Ok, "three-character backreference", 1, 6);
+      Check_Match ("(ab)\1", "abcabc", No_Match, "two-character backreference negative case");
+      Check_Match ("(abc)\1", "abcabd", No_Match, "three-character backreference negative case");
+      Check_Match ("x(ab)\1y", "xababy", Match_Ok, "backreference between literals", 1, 6);
+
+      --  The span the reference consumed has to show up in the match extent.
+      Check_Match ("(ab)\1", "zabab", Match_Ok, "backreference match extent", 2, 5);
+
+      --  Non-regular patterns. "the text is some string written twice" is not
+      --  a regular language, so these are the cases that need a backtracking
+      --  path rather than a lock-step simulation.
+      Check_Match ("^(.*)\1$", "abab", Match_Ok, "doubled string", 1, 4);
+      Check_Match ("^(.*)\1$", "abac", No_Match, "doubled string negative case");
+      Check_Match ("^(.+)\1+$", "ababab", Match_Ok, "repeated string", 1, 6);
+
+      --  Several groups, referenced out of order.
+      Check_Match ("(ab)(cd)\2\1", "abcdcdab", Match_Ok, "two groups reversed", 1, 8);
+      Check_Match ("(ab)(cd)\2\1", "abcdabcd", No_Match, "two groups reversed negative case");
+
+      --  A quantified group leaves its last repetition captured.
+      Check_Match ("(a*)\1", "aaaa", Match_Ok, "quantified group backreference", 1, 4);
+
+      --  An empty capture matches empty text.
+      Check_Match ("(z*)\1x", "x", Match_Ok, "empty group backreference", 1, 1);
+
+      --  Match options still apply on the backtracking path.
+      Check_Match
+        ("(ab)\1", "ABAB", Match_Ok, "case-insensitive multi-character backreference",
+         1, 4, Options => (Case_Sensitive => False, others => <>));
+      Check_Match
+        ("^(ab)\1$", "abab", Match_Ok, "entire multi-character backreference",
+         1, 4, Entire => True);
+      Check_Match
+        ("^(ab)\1$", "ababab", No_Match, "entire backreference rejects a longer text",
+         Entire => True);
+   end Test_Backreferences;
+
    overriding function Name (T : Test_Case) return AUnit.Message_String is
       pragma Unreferenced (T);
    begin
@@ -302,5 +346,6 @@ package body Regexp_Tests.Match_Tests is
       Register_Routine (T, AUnit.Test_Cases.Test_Routine'(Test_Character_Classes'Access), "Character classes");
       Register_Routine (T, AUnit.Test_Cases.Test_Routine'(Test_Escaped_Literals'Access), "Escaped literal matching");
       Register_Routine (T, AUnit.Test_Cases.Test_Routine'(Test_Match_Options'Access), "Match options");
+      Register_Routine (T, AUnit.Test_Cases.Test_Routine'(Test_Backreferences'Access), "Backreferences");
    end Register_Tests;
 end Regexp_Tests.Match_Tests;
