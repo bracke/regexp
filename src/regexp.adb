@@ -4416,7 +4416,8 @@ package body Regexp is
       Steps        : in out Natural;
       Step_Limited : in out Boolean)
    is
-      Pending : array (Positive range 1 .. Default_Max_States) of State_Index := [others => No_State];
+      Pending : array (Positive range 1 .. Default_Max_States) of State_Index :=
+        [others => No_State];
       Head    : Positive := 1;
       Tail    : Natural := 0;
 
@@ -4629,6 +4630,8 @@ package body Regexp is
 
    type Capture_Set is array (Positive range 1 .. Max_Captures) of Text_Range;
 
+   Empty_Captures : constant Capture_Set := [others => <>];
+
    type Capture_Thread is record
       Active   : Boolean := False;
       Captures : Capture_Set := [others => <>];
@@ -4706,8 +4709,24 @@ package body Regexp is
       Steps        : in out Natural;
       Step_Limited : in out Boolean)
    is
-      Pending : array (Positive range 1 .. Default_Max_States) of State_Index := [others => No_State];
-      Pending_Captures : array (Positive range 1 .. Default_Max_States) of Capture_Set := [others => [others => <>]];
+      --  The queue of states still to expand. The captures each was reached
+      --  with are not queued alongside: Enqueue has already stored them in
+      --  Set, and a state is enqueued at most once -- Enqueue returns early
+      --  once Set marks it active -- so its entry still holds them when it is
+      --  taken off the queue.
+      --
+      --  Keeping a second copy here was expensive out of all proportion to
+      --  its use. Text_Range carries default component values, so a whole
+      --  array of capture sets is default-initialised on entry whatever the
+      --  declaration says: sixty-four kilobytes of stores per call, and this
+      --  is called once per active state per input position. It accounted for
+      --  around ninety per cent of the time spent matching with captures.
+      --
+      --  The queue of state indexes stays as it was: it is a scalar array a
+      --  fraction of the size, and leaving it uninitialised measured no
+      --  faster while costing flow analysis a finding.
+      Pending : array (Positive range 1 .. Default_Max_States) of State_Index :=
+        [others => No_State];
       Head    : Positive := 1;
       Tail    : Natural := 0;
 
@@ -4730,7 +4749,6 @@ package body Regexp is
          if Tail < Default_Max_States then
             Tail := Tail + 1;
             Pending (Tail) := Candidate;
-            Pending_Captures (Tail) := Candidate_Captures;
          else
             Step_Limited := True;
          end if;
@@ -4745,7 +4763,13 @@ package body Regexp is
 
          declare
             Current : constant State_Index := Pending (Head);
-            Current_Captures : Capture_Set := Pending_Captures (Head);
+
+            --  The captures this state was reached with, read back from the
+            --  entry Enqueue wrote. The copy is local because the walk below
+            --  adjusts it as it passes capture boundaries.
+            Current_Captures : Capture_Set :=
+              (if Current = No_State then Empty_Captures
+               else Set (Positive (Current)).Captures);
          begin
             if Current /= No_State then
                declare
@@ -4880,18 +4904,26 @@ package body Regexp is
       end loop;
    end Add_Capture_State;
 
+   --  Current and Next are supplied by the caller rather than declared here.
+   --  A Capture_Thread_Set has one thread per possible state and each thread
+   --  carries a whole capture set, so the array runs to tens of kilobytes;
+   --  declaring it locally meant clearing all of it at every starting
+   --  position the search tried, which is what made a substitution cost
+   --  around forty times a plain match of the same expression. The caller
+   --  initialises the arrays once and this walk touches only the states the
+   --  expression actually has.
    procedure Run_From_With_Captures
      (Expression  : Regexp;
       Text        : String;
       Start_Pos   : Positive;
       Require_End : Boolean;
       Options     : Match_Options;
+      Current     : in out Capture_Thread_Set;
+      Next        : in out Capture_Thread_Set;
       Found       : out Match_Result;
       Captures    : out Capture_Set)
       with Pre => Text'Last < Positive'Last
    is
-      Current      : Capture_Thread_Set := [others => <>];
-      Next         : Capture_Thread_Set;
       Empty        : constant Capture_Set := [others => <>];
       Steps        : Natural := 0;
       Step_Limited : Boolean := False;
@@ -4916,6 +4948,15 @@ package body Regexp is
          Found := (Status => No_Match, others => <>);
          return;
       end if;
+
+      --  Whatever the previous starting position left behind. Only the
+      --  states the expression has are ever read, and a thread's captures are
+      --  only read while it is active -- activating one writes them -- so
+      --  clearing the flag is enough and leaves the capture set, which is by
+      --  far the larger part of a thread, untouched.
+      for I in 1 .. Expression.State_Count loop
+         Current (I).Active := False;
+      end loop;
 
       Add_Capture_State (Expression, Current, Expression.Start, Pos, Text, Options, Empty, Steps, Step_Limited);
       if Step_Limited then
@@ -4957,7 +4998,10 @@ package body Regexp is
          exit when Pos > Nat (Text'Last);
          W := Step_Width (Expression, Text, Positive (Pos));
 
-         Next := [others => <>];
+         for I in 1 .. Expression.State_Count loop
+            Next (I).Active := False;
+         end loop;
+
          for I in 1 .. Expression.State_Count loop
             if Current (I).Active then
                Node := Expression.States (I);
@@ -5024,7 +5068,15 @@ package body Regexp is
             exit;
          end if;
 
-         Current := Next;
+         --  Only an active thread's captures mean anything, so an inactive
+         --  one costs a flag rather than a whole capture set.
+         for I in 1 .. Expression.State_Count loop
+            Current (I).Active := Next (I).Active;
+            if Next (I).Active then
+               Current (I).Captures := Next (I).Captures;
+            end if;
+         end loop;
+
          Pos := Pos + W;
       end loop;
 
@@ -5494,17 +5546,22 @@ package body Regexp is
       end if;
    end Run_From_Atomic;
 
-   function Run_From
+   --  Current and Next come from the caller for the same reason as in
+   --  Run_From_With_Captures: an Active_Set has one flag per possible state,
+   --  and clearing all of them at every starting position a search tries cost
+   --  more than the matching did. The caller initialises them once and this
+   --  walk touches only the states the expression has.
+   procedure Run_From
      (Expression  : Regexp;
       Text        : String;
       Start_Pos   : Positive;
       Require_End : Boolean;
-      Options     : Match_Options)
-      return Match_Result
+      Options     : Match_Options;
+      Current     : in out Active_Set;
+      Next        : in out Active_Set;
+      Result      : out Match_Result)
       with Pre => Text'Last < Positive'Last
    is
-      Current      : Active_Set := [others => False];
-      Next         : Active_Set;
       Steps        : Natural := 0;
       Step_Limited : Boolean := False;
       Pos          : Natural := Start_Pos;
@@ -5518,11 +5575,14 @@ package body Regexp is
       Capture_Set_Value : Capture_Set := [others => <>];
    begin
       if not Expression.Valid then
-         return (Status => Invalid_Regexp, others => <>);
+         Result := (Status => Invalid_Regexp, others => <>);
+         return;
       end if;
 
       if Expression.Has_Atomic then
-         return Run_From_Atomic (Expression, Text, Start_Pos, Require_End, Options);
+         Result :=
+           Run_From_Atomic (Expression, Text, Start_Pos, Require_End, Options);
+         return;
       end if;
 
       if Expression.Has_Backreferences then
@@ -5530,16 +5590,26 @@ package body Regexp is
          --  same path, which only a backtracking walk can represent.
          Run_From_Backtracking
            (Expression, Text, Start_Pos, Require_End, Options, Capture_Found, Capture_Set_Value);
-         return Capture_Found;
+         Result := Capture_Found;
+         return;
       end if;
 
       if Pos < Nat (Text'First) or else Pos > Nat (Text'Last) + 1 then
-         return (Status => No_Match, others => <>);
+         Result := (Status => No_Match, others => <>);
+         return;
       end if;
+
+      --  Whatever the previous starting position left behind, over the states
+      --  the expression actually has.
+      for I in 1 .. Expression.State_Count loop
+         Current (I) := False;
+      end loop;
 
       Add_State (Expression, Current, Expression.Start, Pos, Text, Options, Steps, Step_Limited);
       if Step_Limited then
-         return (Status => Match_Limit_Exceeded, Steps_Used => Steps, others => <>);
+         Result :=
+           (Status => Match_Limit_Exceeded, Steps_Used => Steps, others => <>);
+         return;
       end if;
 
       loop
@@ -5565,11 +5635,12 @@ package body Regexp is
                Best_Matched := True;
                Best_Last := Last;
                if Expression.Prefer_First_Match then
-                  return
+                  Result :=
                     (Status     => Match_Ok,
                      First      => Relative_First (Text, Start_Pos),
                      Last       => Relative_Last (Text, Best_Last),
                      Steps_Used => Steps);
+                  return;
                end if;
             end if;
          end if;
@@ -5577,13 +5648,18 @@ package body Regexp is
          exit when Pos > Nat (Text'Last);
          W := Step_Width (Expression, Text, Positive (Pos));
 
-         Next := [others => False];
+         for I in 1 .. Expression.State_Count loop
+            Next (I) := False;
+         end loop;
          for I in 1 .. Expression.State_Count loop
             if Current (I) then
                Node := Expression.States (I);
                Consume_Step (Options, Steps, Step_Limited);
                if Step_Limited then
-                  return (Status => Match_Limit_Exceeded, Steps_Used => Steps, others => <>);
+                  Result :=
+                    (Status => Match_Limit_Exceeded, Steps_Used => Steps,
+                     others => <>);
+                  return;
                end if;
 
                case Node.Kind is
@@ -5615,7 +5691,10 @@ package body Regexp is
                end case;
 
                if Step_Limited then
-                  return (Status => Match_Limit_Exceeded, Steps_Used => Steps, others => <>);
+                  Result :=
+                    (Status => Match_Limit_Exceeded, Steps_Used => Steps,
+                     others => <>);
+                  return;
                end if;
             end if;
          end loop;
@@ -5624,19 +5703,22 @@ package body Regexp is
             exit;
          end if;
 
-         Current := Next;
+         for I in 1 .. Expression.State_Count loop
+            Current (I) := Next (I);
+         end loop;
          Pos := Pos + W;
       end loop;
 
       if Best_Matched then
-         return
+         Result :=
            (Status     => Match_Ok,
             First      => Relative_First (Text, Start_Pos),
             Last       => Relative_Last (Text, Best_Last),
             Steps_Used => Steps);
+         return;
       end if;
 
-      return (Status => No_Match, Steps_Used => Steps, others => <>);
+      Result := (Status => No_Match, Steps_Used => Steps, others => <>);
    end Run_From;
 
    function Find_First
@@ -5674,6 +5756,11 @@ package body Regexp is
       Remaining   : Natural;
       Run_Options : Match_Options := Options;
       UTF_8        : UTF_8_Validation_Result;
+
+      --  The state sets for the walk below, initialised once for the whole
+      --  search rather than at every starting position it tries.
+      Current_States : Active_Set := [others => False];
+      Next_States    : Active_Set := [others => False];
    begin
       if not Expression.Valid then
          return (Status => Invalid_Regexp, others => <>);
@@ -5704,7 +5791,9 @@ package body Regexp is
 
          Remaining := Options.Max_Steps - Total_Steps;
          Run_Options.Max_Steps := Remaining;
-         Result := Run_From (Expression, Text, Start, False, Run_Options);
+         Run_From
+           (Expression, Text, Start, False, Run_Options,
+            Current_States, Next_States, Result);
          if Result.Steps_Used > Natural'Last - Total_Steps then
             return (Status => Match_Limit_Exceeded, Steps_Used => Total_Steps, others => <>);
          end if;
@@ -5824,6 +5913,13 @@ package body Regexp is
       Remaining      : Natural;
       Run_Options    : Match_Options := Options;
       UTF_8           : UTF_8_Validation_Result;
+
+      --  The thread arrays for the walk below, initialised once for the whole
+      --  search rather than at every starting position it tries. They are
+      --  tens of kilobytes each, and the search may try one position per byte
+      --  of the subject.
+      Current_Threads : Capture_Thread_Set := [others => <>];
+      Next_Threads    : Capture_Thread_Set := [others => <>];
    begin
       Captures := [others => <>];
       Count := 0;
@@ -5875,7 +5971,9 @@ package body Regexp is
             Run_From_Backtracking
               (Expression, Text, Start, False, Run_Options, Found, Local_Captures);
          else
-            Run_From_With_Captures (Expression, Text, Start, False, Run_Options, Found, Local_Captures);
+            Run_From_With_Captures
+              (Expression, Text, Start, False, Run_Options,
+               Current_Threads, Next_Threads, Found, Local_Captures);
          end if;
 
          if Found.Steps_Used > Natural'Last - Total_Steps then
@@ -9556,7 +9654,16 @@ package body Regexp is
          return (Status => Invalid_Regexp, others => <>);
       end if;
 
-      return Run_From (Expression, Text, Pos_Or_First (Text'First), True, Options);
+      declare
+         Current_States : Active_Set := [others => False];
+         Next_States    : Active_Set := [others => False];
+         Result         : Match_Result;
+      begin
+         Run_From
+           (Expression, Text, Pos_Or_First (Text'First), True, Options,
+            Current_States, Next_States, Result);
+         return Result;
+      end;
    end Matches_Entire;
 
    function Lint (Expression : Regexp) return Pattern_Lint is

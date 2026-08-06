@@ -6,6 +6,25 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Matching with captures is around eight times faster.** Three working stores were
+  sized by `Default_Max_States` and rebuilt at every starting position a search tried,
+  so the cost of a search was set by the ceiling on states rather than by the expression
+  in hand. `Add_Capture_State` kept a queue of capture sets beside its queue of states,
+  and `Text_Range` carries default component values, so sixty-four kilobytes were
+  initialised on entry however the array was declared — ninety-three per cent of the
+  time spent matching, by profile. That queue is gone: `Enqueue` has already stored the
+  captures in the thread set and a state is enqueued at most once, so they are read back
+  from there. `Run_From_With_Captures` and `Run_From` now take their thread and state
+  sets from the caller, which initialises them once per search instead of once per
+  starting position, and both touch only `State_Count` entries. Clearing a thread writes
+  its flag rather than its whole capture set.
+
+  `Run_From` became a procedure with an `out` result, because SPARK does not allow a
+  function to take `in out` parameters. Flow analysis reports fewer findings than before
+  the change (32, from 36); no behaviour changed, and the suite is unaffected.
+
 ### Fixed
 
 - **A literal `p` or `P` in a character class no longer fails to compile.** Inside a
