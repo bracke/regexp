@@ -173,15 +173,22 @@ package body Regexp_Tests.Match_Tests is
       Check_Match ("\p{digit}+", "abcd", No_Match, "unicode digit property mismatch");
       Check_Match ("\P{digit}+", "ab12cd", Match_Ok, "inverse unicode digit property", 1, 2);
       Check_Match ("\P{digit}+", "1234", No_Match, "inverse unicode digit property mismatch");
+      --  A bare p or P in a class is the letter, not a property. Reading it
+      --  as a property made every set holding one fail to compile, ruling out
+      --  sets as ordinary as [dp] and [pq].
+      Check_Match ("[dp]", "xp", Match_Ok, "literal p in a class", 2, 2);
+      Check_Match ("[dp]", "xq", No_Match, "literal p in a class mismatch");
+      Check_Match ("[P]", "aP", Match_Ok, "literal capital P in a class", 2, 2);
+      Check_Match ("[^p]", "pa", Match_Ok, "literal p in a negated class", 2, 2);
       Check_Match
-        ("[\\p{digit}]",
+        ("[\p{digit}]",
          "a1",
          Match_Ok,
          "unicode property inside class",
          2,
          2);
       Check_Match
-        ("[^\\p{digit}]",
+        ("[^\p{digit}]",
          "a1",
          Match_Ok,
          "negated unicode property inside class",

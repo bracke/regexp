@@ -6,6 +6,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A literal `p` or `P` in a character class no longer fails to compile.** Inside a
+  class the parser tested the *unescaped* character for `p`/`P` and read it as the start
+  of a Unicode property, so ordinary sets like `[dp]`, `[pq]` and `[^p]` were rejected as
+  malformed properties. The property form is recognised on the escaped character now,
+  which is where it was always written. **This changes the class dialect**: a property
+  inside a class is `[\p{digit}]`, not `[\\p{digit}]` as before, and a bare `p` in a
+  class is the letter. Properties outside a class (`\p{digit}`) are unaffected.
+
 ### Added
 
 - **UTF-8 code-point matching.** Compiling a pattern with `Character_Mode => UTF_8_Mode`

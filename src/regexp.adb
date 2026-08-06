@@ -1747,12 +1747,6 @@ package body Regexp is
          Try_Posix_Class (Matched_Posix);
          if Matched_Posix then
             return;
-         elsif Pattern (Positive (Pos)) in 'p' | 'P' then
-            Parse_Unicode_Property (Pattern, Pos, Item, Status, Offset, Good);
-            if not Good then
-               return;
-            end if;
-            Single := False;
          elsif Pattern (Positive (Pos)) = '\' then
             Advance (Pos);
             if Pos > Nat (Pattern'Last) then
@@ -1760,6 +1754,21 @@ package body Regexp is
                Offset := (if Pos = 0 then 0 else Pos - 1);
                return;
             end if;
+
+            --  A property class is written \p{...}, so it is recognised on
+            --  the escaped character. Testing the unescaped one made every
+            --  set holding a literal p or P -- [dp], [pq] -- parse as a
+            --  malformed property and refuse to compile.
+            if Pattern (Positive (Pos)) in 'p' | 'P' then
+               Parse_Unicode_Property
+                 (Pattern, Pos, Item, Status, Offset, Good);
+               if not Good then
+                  return;
+               end if;
+               Single := False;
+               return;
+            end if;
+
             Escape_Class (Pattern (Positive (Pos)), Item, Single, Ch, Good);
             if not Good then
                Status := Invalid_Escape;
