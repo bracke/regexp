@@ -1999,14 +1999,19 @@ package body Regexp is
       end loop;
    end Store_Source;
 
-   function Compile
+   --  An empty expression, held once: cleared from an aggregate, the whole
+   --  of one -- some 150 KB -- was built in the frame that cleared it.
+   Empty_Expression : constant Regexp := (others => <>);
+
+   --  Compile, into its caller's result: compiled into a result of its own
+   --  and returned, the expression was in this frame twice, 300 KB.
+   procedure Compile_Into
      (Pattern            : String;
-      Max_Pattern_Length : Positive := Default_Max_Pattern_Length;
-      Max_States         : Positive := Default_Max_States;
-      Character_Mode     : Character_Mode_Type := ASCII_Mode)
-      return Compile_Result
+      Max_Pattern_Length : Positive;
+      Max_States         : Positive;
+      Character_Mode     : Character_Mode_Type;
+      Result             : out Compile_Result)
    is
-      Result : Compile_Result;
       Pos    : Natural := Nat (Pattern'First);
       Match  : State_Index;
 
@@ -2725,18 +2730,18 @@ package body Regexp is
       Offset       : Natural;
       Ok           : Boolean;
    begin
-      Result.Expression := (others => <>);
+      Result.Expression := Empty_Expression;
       Result.Expression.Compiled_Mode := Character_Mode;
 
       if Pattern'Length = 0 then
          Result.Status := Empty_Pattern;
-         return Result;
+         return;
       end if;
 
       if Pattern'Length > Max_Pattern_Length then
          Result.Status := Pattern_Too_Long;
          Result.Error_Offset := Max_Pattern_Length + 1;
-         return Result;
+         return;
       end if;
 
       Parse_Expression
@@ -2744,14 +2749,14 @@ package body Regexp is
       if not Ok then
          Result.Status := Status;
          Result.Error_Offset := Offset;
-         return Result;
+         return;
       end if;
 
       New_State (Result.Expression, Node_Match, Max_States, Match);
       if Match = No_State then
          Result.Status := Too_Many_States;
          Result.Error_Offset := Pattern'Length;
-         return Result;
+         return;
       end if;
 
       Patch_To (Result.Expression, Alternatives, Match);
@@ -2760,7 +2765,19 @@ package body Regexp is
       Store_Source (Result.Expression, Pattern, Source_Pattern);
       Result.Status := Compile_Ok;
       Result.Error_Offset := 0;
-      return Result;
+   end Compile_Into;
+
+   function Compile
+     (Pattern            : String;
+      Max_Pattern_Length : Positive := Default_Max_Pattern_Length;
+      Max_States         : Positive := Default_Max_States;
+      Character_Mode     : Character_Mode_Type := ASCII_Mode)
+      return Compile_Result
+   is
+   begin
+      return Result : Compile_Result do
+         Compile_Into (Pattern, Max_Pattern_Length, Max_States, Character_Mode, Result);
+      end return;
    end Compile;
 
    function Is_Valid (Expression : Regexp) return Boolean is
