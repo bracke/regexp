@@ -2011,6 +2011,7 @@ package body Regexp is
       Max_States         : Positive;
       Character_Mode     : Character_Mode_Type;
       Result             : out Compile_Result)
+   with Pre => Pattern'Last < Positive'Last, Always_Terminates
    is
       Pos    : Natural := Nat (Pattern'First);
       Match  : State_Index;
@@ -2730,6 +2731,8 @@ package body Regexp is
       Offset       : Natural;
       Ok           : Boolean;
    begin
+      Result.Status := Empty_Pattern;
+      Result.Error_Offset := 0;
       Result.Expression := Empty_Expression;
       Result.Expression.Compiled_Mode := Character_Mode;
 
